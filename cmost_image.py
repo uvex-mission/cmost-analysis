@@ -19,9 +19,9 @@ def open_cmost_file(filename):
     
     # Other headers are set by the user, so cope if they are not set
     if 'EXPTIME' in cmost_hdr.keys():
-        exptime = cmost_hdr['EXPTIME']
+        exp_time = cmost_hdr['EXPTIME']
     else:
-        exptime = '-1'
+        exp_time = '-1'
     if 'LED' in cmost_hdr.keys():
         led_voltage = cmost_hdr['LED']
     else:
@@ -42,7 +42,7 @@ def open_cmost_file(filename):
 
     cmost_file.close()
     
-    return frames, readout_mode, date, exptime, led_voltage, temp
+    return frames, readout_mode, date, exp_time, led_voltage, temp
 
 '''
     Function to get the image frame from correlated double sampling input
