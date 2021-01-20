@@ -71,7 +71,7 @@ def get_file_list(cmost_dir,file_prefix='cmost',debug=False):
     files = np.array(os.listdir(cmost_dir))
     if file_prefix != '':
         filefilter = [f[0:len(file_prefix)] == file_prefix for f in files]
-        files = files[filefilter]
+        files = np.sort(files[filefilter])
     num_files = len(files)
 
     # Populate a list of file properties
