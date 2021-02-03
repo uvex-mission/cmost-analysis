@@ -11,6 +11,7 @@ __pycache__
 
 # Local data
 local_data/*
+data/*
 
 # Other generated files
 */version.py
