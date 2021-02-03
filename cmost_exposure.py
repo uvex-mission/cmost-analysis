@@ -22,7 +22,7 @@ class Exposure():
     
     perform_cds
     
-    print_info
+    get_info
     
     Attributes
     ----------
@@ -44,6 +44,15 @@ class Exposure():
     temperature : float
     	Detector temperature
     	
+    camera_id : string
+    	ID of the CMOST setup being used
+    	
+    det_id : string
+    	ID of the detector being used
+    	
+    gain : string
+    	Gain mode being used
+    	
     raw_frames : 3-d int32 array
     	A Numpy array of 2-d frames, containing the recorded pixel values
     	
@@ -54,23 +63,11 @@ class Exposure():
 	def __init__(self, filepath=''):
 		self.filepath = filepath
 		
-		# Initialize empty attributes
-		self.readout_mode = ''
-		self.date = datetime.fromtimestamp(0)
-		self.exp_time = -1.
-		self.led_voltage = -1.
-		self.temperature = -1.
-		self.raw_frames = np.array([])
-		
 		if self.filepath != '':
 			# Read image at provided filepath
 			self.read_fits(self.filepath)
-
-		# Perform CDS on frames
-		if len(self.raw_frames) > 0:
-			self.perform_cds()
 		
-		# CamID and DetID? Gain mode?
+		# Subframe
 
 
 	def read_fits(self,filepath):
@@ -93,12 +90,12 @@ class Exposure():
 		self.date = datetime.fromisoformat(cmost_hdr['DATE'])
 
 		# Other headers are set by the user, so cope if they are not set
-		if 'EXPTIME' in cmost_hdr.keys(): 
-			self.exp_time = float(cmost_hdr['EXPTIME'])
-		if 'LED' in cmost_hdr.keys(): 
-			self.led_voltage = float(cmost_hdr['LED'])
-		if 'TEMP' in cmost_hdr.keys(): 
-			self.temperature = float(cmost_hdr['TEMP'])
+		self.exp_time = float(cmost_hdr.get('EXPTIME',-1))
+		self.led_voltage = float(cmost_hdr.get('LED',-1))
+		self.temperature = float(cmost_hdr.get('TEMP',-1))
+		self.camera_id = cmost_hdr.get('CAMERAID','')
+		self.det_id = cmost_hdr.get('DETID','')
+		self.gain = cmost_hdr.get('GAIN','')
 
 		# Create an array of useable frames
 		frame_shape = cmost_file[1].data.shape
@@ -109,22 +106,65 @@ class Exposure():
 		for i in range(useable_frames):
 			# Frame data is in uint16 by default, open in int32
 			self.raw_frames[i] = np.array(cmost_file[i+2].data, dtype=np.int32)
+			
+		# Perform CDS on the frames
+		self.perform_cds()
 
 		cmost_file.close()
 
 	def perform_cds(self):
 		'''
-		Perform necessary CDS operation based on the readout mode
+		Perform necessary CDS operation based on the readout mode on all useable frames
 		'''
-		x = 'To-do'
+		if self.readout_mode in ['DEFAULT','ROLLINGRESET','PSEUDOGLOBALRESET']:
+			# CDS columns are laid out side by side
+			oldshape = self.raw_frames.shape
+			image = np.reshape(self.raw_frames, 
+							(oldshape[0], oldshape[1]*256, 2, oldshape[2]//256//2),
+							order='F')
+			cds_image = image[:,:,0,:] - image[:,:,1,:]
+			self.cds_frames = np.reshape(cds_image, 
+							(oldshape[0], oldshape[1], oldshape[2]//2), 
+							order='F')
+		elif self.readout_mode in ['TRUEGLOBALRESET']:
+			# CDS columns are laid out top and bottom
+			oldshape = self.raw_frames.shape
+			image = np.reshape(self.raw_frames,
+							(oldshape[0], oldshape[1]//2, 2, oldshape[2]),
+							order='F')
+			cds_image = image[:,:,1,:] - image[:,:,0,:]
+			self.cds_frames = cds_image		
+		else:
+			# Just return the raw image
+			self.cds_frames = self.raw_frames
 
-	def print_info():
+	def get_info(self):
 		'''
 		Output useful image info in a nice readable format
 		'''
+		info_string = """ Properties: 
+		Readout mode: {} 
+		Date: {} 
+		Exposure time: {} ms
+		LED voltage: {} V 
+		Temperature: {} K
+		Camera ID: {} 
+		Detector ID: {}
+		Gain mode: {}
+		Number of frames: {}
+		""".format(self.readout_mode, self.date.isoformat(), self.exp_time,
+					self.led_voltage, self.temperature, self.camera_id, self.det_id,
+					self.gain, len(self.raw_frames))
+		return info_string
+
+	def get_mean(self):
 		x = 'To-do' 
-
-
+	
+	def get_median(self):
+		x = 'To-do' 
+	
+	def get_variance(self):
+		x = 'To-do' 
 
 
 # To-do: 
