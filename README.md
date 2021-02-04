@@ -19,4 +19,4 @@ Analysis (plotting images, fitting lines etc.) is to be done using Jupyter noteb
 * 20210122\_LED\_warmup.ipynb
 * 20210122\_PTC\_by\_LED\_voltage.pdf
 
-Do not put analysis code in cmost\_exposure.py, and if you find yourself repeatedly doing I/O steps in the notebooks, put it in cmost\_exposure.py. 
+Do not put analysis code in cmost\_exposure.py, and if you find yourself repeatedly doing I/O steps in the notebooks, put it in cmost\_exposure.py. Do not do development on cmost\_exposure.py from the CMOST computer, as it is not set up to push changes back up to Github. Put in an issue here instead. 
