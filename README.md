@@ -7,7 +7,7 @@ This package contains tools and notebooks for analyzing CMOST images
 I/O is handled through the Exposure() class in cmost\_exposure.py. This class can:
 * read a FITS file
 * perform correlated double sampling
-* define subframes (regions of interest)
+* get statistical properties of subframes (regions of interest)
 
 In the future, it will also be able to handle flat-fielding, gain per amplifier etc.
 
