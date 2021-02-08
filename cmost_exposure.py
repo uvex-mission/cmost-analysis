@@ -15,6 +15,10 @@ class Exposure():
         Defaults to ''.
         If provided, populate attributes from the FITS image at data_dir/filepath
         
+    cleanup : bool
+    	Defaults to True.
+    	If True, delete raw frames after CDS to save on memory.
+        
     Methods
     -------
     read_fits
@@ -22,6 +26,8 @@ class Exposure():
     perform_cds
     
     get_info
+    
+    cleanup_frames
     
     Attributes
     ----------
@@ -59,14 +65,16 @@ class Exposure():
     	A Numpy array of 2-d frames, containing the pixel values after CDS processing has been applied
     
 	'''
-	def __init__(self, filepath=''):
+	def __init__(self, filepath='', cleanup=True):
 		self.filepath = filepath
 		
 		if self.filepath != '':
 			# Read image at provided filepath
 			self.read_fits(self.filepath)
 		
-		# Subframe
+		# Once everything is loaded delete what's no longer needed
+		if cleanup:
+			self.cleanup_frames()
 
 
 	def read_fits(self,filepath):
@@ -216,12 +224,19 @@ class Exposure():
 		else:
 			print('WARNING: Not enough frames to calculate variance')
 			return 0
+		
+	def cleanup_frames(self):
+		'''
+		Delete raw frames to save on memory
+		'''
+		self.raw_frames = np.array([])
+		
 
 '''
 	Utility functions for loading Exposure objects
 '''
 
-def load_by_file_prefix(file_prefix):
+def load_by_file_prefix(file_prefix,**kwargs):
 	'''
 	Load all FITS files that begin with the filepath string provided
 	
@@ -237,9 +252,9 @@ def load_by_file_prefix(file_prefix):
 	directory = os.path.dirname(file_prefix)
 	filepaths = [os.path.join(directory, f) for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
 	
-	return load_by_filepath(filepaths)
+	return load_by_filepath(filepaths,**kwargs)
 	
-def load_by_filepath(filepaths):
+def load_by_filepath(filepaths,**kwargs):
 	'''
 	Load FITS files from filepaths provided
 	
@@ -252,7 +267,7 @@ def load_by_filepath(filepaths):
     -------
     List of Exposure objects
 	'''
-	exposures = [Exposure(f) for f in filepaths[:-1]]
+	exposures = [Exposure(f,**kwargs) for f in filepaths[:-1]]
 	return exposures
 
 	
