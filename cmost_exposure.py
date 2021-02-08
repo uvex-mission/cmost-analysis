@@ -106,13 +106,20 @@ class Exposure():
 
 		# Create an array of useable frames
 		frame_shape = cmost_file[1].data.shape
-		# Ignore 0th extension and first frame (data is meaningless)
-		useable_frames = len(cmost_file)-2 
+		
+		if self.readout_mode in ['DEFAULT','ROLLINGRESET']:
+			# Ignore 0th extension and first frame (data is meaningless)
+			ignore_ext = 2
+		else:
+			# Just ignore 0th Extension
+			ignore_ext = 1
+		
+		useable_frames = len(cmost_file) - ignore_ext
 		
 		self.raw_frames = np.zeros([useable_frames,frame_shape[0],frame_shape[1]])
 		for i in range(useable_frames):
 			# Frame data is in uint16 by default, open in int32
-			self.raw_frames[i] = np.array(cmost_file[i+2].data, dtype=np.int32)
+			self.raw_frames[i] = np.array(cmost_file[i+ignore_ext].data, dtype=np.int32)
 			
 		# Perform CDS on the frames
 		self.perform_cds()
@@ -166,7 +173,7 @@ class Exposure():
 		Number of frames: {}
 		""".format(self.readout_mode, self.date.isoformat(), self.exp_time,
 					self.led_voltage, self.temperature, self.camera_id, self.det_id,
-					self.gain, len(self.raw_frames))
+					self.gain, len(self.cds_frames))
 		return info_string
 
 	def get_mean(self, subframe):
