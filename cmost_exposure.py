@@ -142,12 +142,7 @@ class Exposure():
 							order='F')
 		elif self.readout_mode in ['TRUEGLOBALRESET']:
 			# CDS columns are laid out top and bottom
-			oldshape = self.raw_frames.shape
-			image = np.reshape(self.raw_frames,
-							(oldshape[0], oldshape[1]//2, 2, oldshape[2]),
-							order='F')
-			cds_image = image[:,:,1,:] - image[:,:,0,:]
-			self.cds_frames = cds_image		
+			self.cds_frames = self.raw_frames[:,2048:,:] - self.raw_frames[:,:2048,:]
 		else:
 			# Just return the raw image
 			self.cds_frames = self.raw_frames
