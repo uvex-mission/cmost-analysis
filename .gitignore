@@ -9,9 +9,10 @@ __pycache__
 # add a non-generated .c extension, use `git add -f filename.c`.
 *.c
 
-# Local data
+# Local data and plots
 local_data/*
 data/*
+notebooks/plots/*
 
 # Other generated files
 */version.py
