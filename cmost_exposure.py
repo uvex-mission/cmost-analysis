@@ -12,12 +12,16 @@ class Exposure():
     Parameters
     ----------
     filepath : string
-        Defaults to ''.
+        Defaults to ''
         If provided, populate attributes from the FITS image at data_dir/filepath
         
+    custom_keys : string array or list
+    	Defaults to []
+    	Specific header keys to load in addition to the defaults
+        
     cleanup : bool
-    	Defaults to True.
-    	If True, delete raw frames after CDS to save on memory.
+    	Defaults to True
+    	If True, delete raw frames after CDS to save on memory
         
     Methods
     -------
@@ -58,6 +62,9 @@ class Exposure():
     gain : string
     	Gain mode being used
     	
+    custom_key_values: dict
+    	Dictionary of custom keys and associated values
+    	
     raw_frames : 3-d int32 array
     	A Numpy array of 2-d frames, containing the recorded pixel values
     	
@@ -65,19 +72,19 @@ class Exposure():
     	A Numpy array of 2-d frames, containing the pixel values after CDS processing has been applied
     
 	'''
-	def __init__(self, filepath='', cleanup=True):
+	def __init__(self, filepath='', custom_keys=[], cleanup=True):
 		self.filepath = filepath
 		
 		if self.filepath != '':
 			# Read image at provided filepath
-			self.read_fits(self.filepath)
+			self.read_fits(self.filepath, custom_keys)
 		
 		# Once everything is loaded delete what's no longer needed
 		if cleanup:
 			self.cleanup_frames()
 
 
-	def read_fits(self,filepath):
+	def read_fits(self, filepath, custom_keys):
 		'''
 		Read FITS image and populate attributes
 		
@@ -103,6 +110,11 @@ class Exposure():
 		self.camera_id = cmost_hdr.get('CAMERAID','')
 		self.det_id = cmost_hdr.get('DETID','')
 		self.gain = cmost_hdr.get('GAIN','')
+		
+		# Any other non-default header keys to search for as passed by user
+		self.custom_key_values = {}
+		for k in custom_keys:
+			self.custom_key_values[k] = cmost_hdr.get(k,None)
 
 		# Create an array of useable frames
 		frame_shape = cmost_file[1].data.shape
@@ -156,6 +168,12 @@ class Exposure():
 		info_string : string
 			String containing properties from FITS header and number of frames
 		'''
+		# Build custom keys string
+		custom_key_str = ''
+		for k in self.custom_key_values:
+			custom_key_str += '{}: {}\n\t\t'.format(k,self.custom_key_values[k])
+		
+		# Create info string
 		info_string = """ Properties: 
 		Readout mode: {} 
 		Date: {} 
@@ -166,9 +184,10 @@ class Exposure():
 		Detector ID: {}
 		Gain mode: {}
 		Number of frames: {}
+		{}
 		""".format(self.readout_mode, self.date.isoformat(), self.exp_time,
 					self.led_voltage, self.temperature, self.camera_id, self.det_id,
-					self.gain, len(self.cds_frames))
+					self.gain, len(self.cds_frames), custom_key_str)
 		return info_string
 
 	def get_mean(self, subframe):
@@ -247,6 +266,9 @@ def load_by_file_prefix(file_prefix,**kwargs):
     file_prefix : string
     	Common path to desired FITS files, including filename prefix
     	
+    **kwargs
+    	Any keyword arguments to pass on to Exposure
+    	
     Returns
     -------
     List of Exposure objects
@@ -265,15 +287,18 @@ def load_by_filepath(filepaths,**kwargs):
     filepaths : str array
     	Array of filepaths to desired FITS files
     	
+    **kwargs
+    	Any keyword arguments to pass on to Exposure
+    	
     Returns
     -------
     List of Exposure objects
 	'''
-	exposures = [Exposure(f,**kwargs) for f in filepaths[:-1]]
+	exposures = [Exposure(f,**kwargs) for f in filepaths]
 	return exposures
 
 	
-def scan_headers(directory):
+def scan_headers(directory,custom_keys=[]):
 	'''
 	Scan the FITS headers in given directory and return file details
 	
@@ -281,6 +306,10 @@ def scan_headers(directory):
     ----------
     directory : string
     	Path to the directory to scan
+    	
+    custom_keys : string array or list
+    	Defaults to []
+    	Specific non-default header keys to search
     	
     Returns
     -------
@@ -294,16 +323,28 @@ def scan_headers(directory):
 			cmost_file = fits.open(filepath)
 			hdr = cmost_file[0].header
 			cmost_file.close()
+			
+			# List the default properties
+			row = [filepath, hdr['READOUTM'], datetime.fromisoformat(hdr['DATE']),
+					float(hdr.get('EXPTIME',-1)), float(hdr.get('LED',-1)), 
+					float(hdr.get('TEMP',-1)), hdr.get('CAMERAID',''), 
+					hdr.get('DETID',''), hdr.get('GAIN','')]
+			
+			# Add in any custom keys
+			for k in custom_keys:
+				# If key not found, default to None
+				row.append(hdr.get(k,None))
     		
 			# Create table row
-			table_rows.append((filepath, hdr['READOUTM'], datetime.fromisoformat(hdr['DATE']),
-							float(hdr.get('EXPTIME',-1)), float(hdr.get('LED',-1)), 
-							float(hdr.get('TEMP',-1)), hdr.get('CAMERAID',''), 
-							hdr.get('DETID',''), hdr.get('GAIN','')))
+			table_rows.append(row)
+	
+	# Define column names
+	col_names = ['FILEPATH', 'READOUTM', 'DATE', 'EXPTIME', 'LED', 'TEMP', 
+					'CAMERAID', 'DETID', 'GAIN']
+	col_names.extend(custom_keys)
 	
 	# Construct astropy table
-	t = Table(rows=table_rows, 
-				names=('FILEPATH', 'READOUTM', 'DATE', 'EXPTIME', 'LED', 'TEMP', 'CAMERAID', 'DETID', 'GAIN'))
+	t = Table(rows=table_rows, names=col_names)
 	
 	return t
 
