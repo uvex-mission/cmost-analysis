@@ -68,9 +68,10 @@ class Exposure():
     raw_frames : 3-d int32 array
     	A Numpy array of 2-d frames, containing the recorded pixel values
     	
-    cds_frames : 3-d int32 array
+    cds_frames : 3-d or 4-d int32 array
     	A Numpy array of 2-d frames, containing the pixel values after CDS processing has been applied
-    
+    	If HDR more is used, array is shape len(raw_frames) x 2 x frame shape, 
+    	and for each raw_frame, cds_frames contains a high-gain frame followed by a low-gain frame
 	'''
 	def __init__(self, filepath='', custom_keys=[], cleanup=True):
 		self.filepath = filepath
@@ -82,7 +83,6 @@ class Exposure():
 		# Once everything is loaded delete what's no longer needed
 		if cleanup:
 			self.cleanup_frames()
-
 
 	def read_fits(self, filepath, custom_keys):
 		'''
@@ -119,7 +119,7 @@ class Exposure():
 		# Create an array of useable frames
 		frame_shape = cmost_file[1].data.shape
 		
-		if self.readout_mode in ['DEFAULT','ROLLINGRESET']:
+		if self.readout_mode in ['DEFAULT','ROLLINGRESET','ROLLINGRESET_HDR']:
 			# Ignore 0th extension and first frame (data is meaningless)
 			ignore_ext = 2
 		else:
@@ -155,6 +155,21 @@ class Exposure():
 		elif self.readout_mode in ['TRUEGLOBALRESET']:
 			# CDS columns are laid out top and bottom
 			self.cds_frames = self.raw_frames[:,2048:,:] - self.raw_frames[:,:2048,:]
+		elif self.readout_mode in ['ROLLINGRESET_HDR']:
+			# Four columns, order is 0: Reset Low, 1: Reset High, 2: Signal High, 3: Signal Low
+			oldshape = self.raw_frames.shape
+			image = np.reshape(self.raw_frames,(oldshape[0], oldshape[1]*256, 4, 
+							oldshape[2]//256//4),order='F')
+			
+			cds_high = image[:,:,1,:] - image[:,:,2,:]
+			cds_low = image[:,:,0,:] - image[:,:,3,:]
+
+			cds_high_frames = np.reshape(cds_high, (oldshape[0], oldshape[1], 
+							oldshape[2]//4), order='F')
+			cds_low_frames = np.reshape(cds_low, (oldshape[0], oldshape[1], 
+							oldshape[2]//4), order='F')
+			# 2-d array of 2-d frames, with shape len(raw_frames) x 2
+			self.cds_frames = np.stack((cds_high_frames, cds_low_frames), axis=1)
 		else:
 			# Just return the raw image
 			self.cds_frames = self.raw_frames
@@ -172,6 +187,10 @@ class Exposure():
 		custom_key_str = ''
 		for k in self.custom_key_values:
 			custom_key_str += '{}: {}\n\t\t'.format(k,self.custom_key_values[k])
+			
+		hdr_string = ''
+		if self.readout_mode in ['ROLLINGRESET_HDR']:
+			hdr_string = ' x 2'
 		
 		# Create info string
 		info_string = """ Properties: 
@@ -183,11 +202,11 @@ class Exposure():
 		Camera ID: {} 
 		Detector ID: {}
 		Gain mode: {}
-		Number of frames: {}
+		Number of frames: {}{} frames
 		{}
 		""".format(self.readout_mode, self.date.isoformat(), self.exp_time,
 					self.led_voltage, self.temperature, self.camera_id, self.det_id,
-					self.gain, len(self.cds_frames), custom_key_str)
+					self.gain, len(self.cds_frames), hdr_string, custom_key_str)
 		return info_string
 
 	def get_mean(self, subframe):
@@ -201,10 +220,14 @@ class Exposure():
 			
 		Returns
 		-------
-		Mean of subframe across all useable frames
+		m : float or float array
+			Mean of subframe across all useable frames, or array of means for HDR mode
 		'''
 		x1, x2, y1, y2 = subframe
-		m = np.mean(self.cds_frames[:,y1:y2,x1:x2])
+		if self.readout_mode in ['ROLLINGRESET_HDR']:
+			m = np.mean(self.cds_frames[:,:,y1:y2,x1:x2],axis=(0,2,3))
+		else:
+			m = np.mean(self.cds_frames[:,y1:y2,x1:x2])
 		return m
 	
 	def get_median(self, subframe):
@@ -218,10 +241,14 @@ class Exposure():
 			
 		Returns
 		-------
-		Median of subframe across all useable frames
+		m : float or float array
+			Median of subframe across all useable frames, or array of medians for HDR mode
 		'''
 		x1, x2, y1, y2 = subframe
-		m = np.median(self.cds_frames[:,y1:y2,x1:x2])
+		if self.readout_mode in ['ROLLINGRESET_HDR']:
+			m = np.median(self.cds_frames[:,:,y1:y2,x1:x2],axis=(0,2,3))
+		else:
+			m = np.median(self.cds_frames[:,y1:y2,x1:x2])
 		return m
 	
 	def get_variance(self, subframe):
@@ -235,12 +262,18 @@ class Exposure():
 			
 		Returns
 		-------
-		Variance of the subframe if more than one useable frame, otherwise 0
+		var : float or float array
+			Variance of the subframe if more than one useable frame, otherwise 0.
+			Array of variances for HDR mode
 		'''
 		x1, x2, y1, y2 = subframe
 		if len(self.cds_frames) > 1:
-			diff = self.cds_frames[1,y1:y2,x1:x2] - self.cds_frames[0,y1:y2,x1:x2]
-			var = np.var(diff) / 2
+			if self.readout_mode in ['ROLLINGRESET_HDR']:
+				diff = self.cds_frames[1,:,y1:y2,x1:x2] - self.cds_frames[0,:,y1:y2,x1:x2]
+				var = np.var(diff,axis=(1,2)) / 2
+			else:
+				diff = self.cds_frames[1,y1:y2,x1:x2] - self.cds_frames[0,y1:y2,x1:x2]
+				var = np.var(diff) / 2
 			return var
 		else:
 			print('WARNING: Not enough frames to calculate variance')
