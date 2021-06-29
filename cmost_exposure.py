@@ -100,8 +100,8 @@ class Exposure():
 		cmost_hdr = cmost_file[0].header
 
 		# DATE and READOUTM are set automatically by the camera control
-		self.readout_mode = cmost_hdr['READOUTM']
-		self.date = datetime.fromisoformat(cmost_hdr['DATE'])
+		self.readout_mode = cmost_hdr.get('READOUTM','DEFAULT')
+		self.date = datetime.fromisoformat(cmost_hdr.get('DATE','0001-01-01'))
 
 		# Other headers are set by the user, so cope if they are not set
 		self.exp_time = float(cmost_hdr.get('EXPTIME',-1))
@@ -117,14 +117,21 @@ class Exposure():
 			self.custom_key_values[k] = cmost_hdr.get(k,None)
 
 		# Create an array of useable frames
-		frame_shape = cmost_file[1].data.shape
+		frame_shape = cmost_file[0].data.shape
 		
-		if self.readout_mode in ['DEFAULT','ROLLINGRESET','ROLLINGRESET_HDR']:
-			# Ignore 0th extension and first frame (data is meaningless)
-			ignore_ext = 2
+		
+		if len(cmost_file) > 1:
+			# This file will have at least one unusable frame
+			if self.readout_mode in ['DEFAULT','ROLLINGRESET','ROLLINGRESET_HDR']:
+				# Ignore 0th extension and first frame (data is meaningless)
+				ignore_ext = 2
+			else:
+				# Just ignore 0th Extension
+				ignore_ext = 1
 		else:
-			# Just ignore 0th Extension
-			ignore_ext = 1
+			# Image is stored in the 0th Extension
+			# For frames not taken directly from the camera
+			ignore_ext = 0
 		
 		useable_frames = len(cmost_file) - ignore_ext
 		
