@@ -115,12 +115,11 @@ class Exposure():
 		self.custom_key_values = {}
 		for k in custom_keys:
 			self.custom_key_values[k] = cmost_hdr.get(k,None)
-
-		# Create an array of useable frames
-		frame_shape = cmost_file[0].data.shape
-		
 		
 		if len(cmost_file) > 1:
+			# Create an array of useable frames
+			frame_shape = cmost_file[1].data.shape	
+		
 			# This file will have at least one unusable frame
 			if self.readout_mode in ['DEFAULT','ROLLINGRESET','ROLLINGRESET_HDR']:
 				# Ignore 0th extension and first frame (data is meaningless)
@@ -132,6 +131,7 @@ class Exposure():
 			# Image is stored in the 0th Extension
 			# For frames not taken directly from the camera
 			ignore_ext = 0
+			frame_shape = cmost_file[0].data.shape
 		
 		useable_frames = len(cmost_file) - ignore_ext
 		
