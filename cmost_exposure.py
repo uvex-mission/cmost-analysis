@@ -29,6 +29,8 @@ class Exposure():
     
     perform_cds
     
+    bin_frames
+    
     get_info
     
     cleanup_frames
@@ -65,13 +67,17 @@ class Exposure():
     custom_key_values: dict
     	Dictionary of custom keys and associated values
     	
-    raw_frames : 3-d int32 array
+    raw_frames : 3-d uint32 array
     	A Numpy array of 2-d frames, containing the recorded pixel values
     	
-    cds_frames : 3-d or 4-d int32 array
+    cds_frames : 3-d or 4-d float64 array
     	A Numpy array of 2-d frames, containing the pixel values after CDS processing has been applied
     	If HDR more is used, array is shape len(raw_frames) x 2 x frame shape, 
     	and for each raw_frame, cds_frames contains a high-gain frame followed by a low-gain frame
+    	
+    binned_frames : 3-d or 4-d float64 array
+    	A Numpy array of 2-d frames, containing CDS frames that have been binned up by a factor supplied
+    	by the user (default 4)
 	'''
 	def __init__(self, filepath='', custom_keys=[], cleanup=True):
 		self.filepath = filepath
@@ -137,8 +143,8 @@ class Exposure():
 		
 		self.raw_frames = np.zeros([useable_frames,frame_shape[0],frame_shape[1]])
 		for i in range(useable_frames):
-			# Frame data is in uint16 by default, open in int32
-			self.raw_frames[i] = np.array(cmost_file[i+ignore_ext].data, dtype=np.int32)
+			# Frame data is in uint16 or uint32 by default, open in uint32
+			self.raw_frames[i] = np.array(cmost_file[i+ignore_ext].data, dtype=np.uint32)
 			
 		# Perform CDS on the frames
 		self.perform_cds()
@@ -180,6 +186,22 @@ class Exposure():
 		else:
 			# Just return the raw image
 			self.cds_frames = self.raw_frames
+			
+	def bin_frames(self, bin_size=4):
+		''' 
+		Bin frames by given number of pixels (defaults to 4x4)
+		'''
+		if self.readout_mode in ['ROLLINGRESET_HDR']:
+			print('ERROR: binning not yet implemented for HDR mode, get Hannah to do this')
+		elif (self.cds_frames.shape[1] % bin_size == 0) & (self.cds_frames.shape[2] % bin_size == 0):
+   			self.binned_frames = self.cds_frames.reshape(self.cds_frames.shape[0], 
+   							self.cds_frames.shape[1] // bin_size, bin_size, 
+                            self.cds_frames.shape[2] // bin_size, bin_size).mean(-1).mean(2)
+		else:
+			print('ERROR: bin_size must be exact divisor of {}, {}'.format(self.cds_frames.shape[1],
+																			self.cds_frames.shape[2]))
+		
+		return self.binned_frames
 
 	def get_info(self):
 		'''
