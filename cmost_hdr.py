@@ -185,7 +185,8 @@ def get_snr(count_rate, exp_times, band='fuv', gain_mode='high'):
 
 		# Calculate shot noise and dark noise
 		shot_noise = np.sqrt(signal + sky_bgd).value * u.electron
-        dark_noise = dark_current * t
+		dark_noise = dark_current * t
+
 
 		# Get SNR
 		snr = signal / np.sqrt(shot_noise**2 + dark_noise + read_noise[gain_mode]**2)
