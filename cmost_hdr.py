@@ -2,7 +2,6 @@
 import numpy as np
 import astropy.units as u
 import astropy.constants as cr
-from astropy.modeling.blackbody import FLAM
 from astropy.convolution import convolve_fft, Gaussian2DKernel
 
 # Set telescope details
@@ -13,7 +12,7 @@ mirrors = 3
 qe = 0.4 * u.electron / u.ph
 
 # Band-specific details
-band_wav = {'nuv': [200, 300] * u.nm, 'fuv': [145, 175] * u.nm}
+band_wav = {'nuv': [200, 270] * u.nm, 'fuv': [140, 190] * u.nm}
 sky_bgd_rate = {'nuv': 1.0 * u.ph / u.s, 'fuv': 0.015 * u.ph / u.s} # per pixel
 dichroic = {'nuv': 0.75, 'fuv': 0.5}
 
@@ -22,10 +21,10 @@ psf_pix = 4
 dark_current = 0.01 * u.electron / u.s
 pixel_size = 1 * u.arcsec
 
-# Gain-mode-specific details
-gain = {'high': 1.2 * u.adu / u.electron, 'low': 10.1 * u.adu / u.electron}
-read_noise = {'high': 2 * u.electron, 'low': 10 * u.electron}
-well_depth = {'high': 25000 * u.electron, 'low': 190000 * u.electron}
+# Gain-mode-specific details # Correct as of the CMOST paper
+gain = {'high': 1.2 * u.electron / u.adu, 'low': 8.5 * u.electron / u.adu}
+read_noise = {'high': 2.1 * u.electron, 'low': 10.1 * u.electron}
+well_depth = {'high': 15000 * u.electron, 'low': 120000 * u.electron}
 
 # PSF details
 psf_fwhm = 2 * u.arcsec
@@ -55,7 +54,7 @@ def magnitude_to_count_rate(magnitudes, band='fuv'):
 	for i, m in enumerate(magnitudes):
 	
 		# Convert to flux density
-		flux_den = m.to(FLAM, equivalencies=u.spectral_density(wav))
+		flux_den = m.to(u.erg/u.s/u.cm**2/u.AA, equivalencies=u.spectral_density(wav))
 		ph_flux = flux_den * dw / ph_energy
 
 		# In-band rate
@@ -75,10 +74,6 @@ def count_rate_to_electron_rate(count_rate):
 		
 	exp_time: float
 		Exposure time in seconds
-		
-	gain_mode : string
-		Which detector gain mode to use, options are 'low' and 'high'
-		Defaults to 'high'
 		
 	Returns
 	-------
@@ -150,7 +145,7 @@ def get_signal(count_rate, exp_times, gain_mode='high'):
 	signals, sat = [], []
 	for t in exp_times:
 		e, saturated = count_rate_to_electrons(count_rate, t, gain_mode=gain_mode)
-		signals.append(e * gain[gain_mode])
+		signals.append(e / gain[gain_mode])
 		sat.append(saturated)
 	
 	return np.array(signals), np.array(sat)
@@ -189,10 +184,11 @@ def get_snr(count_rate, exp_times, band='fuv', gain_mode='high'):
 		sky_bgd, _ = count_rate_to_electrons(sky_bgd_rate[band], t, gain_mode=gain_mode)
 
 		# Calculate shot noise and dark noise
-		shot_noise = np.sqrt(signal + sky_bgd).value * u.electron 
+		shot_noise = np.sqrt(signal + sky_bgd).value * u.electron
+        dark_noise = dark_current * t
 
 		# Get SNR
-		snr = signal / np.sqrt(shot_noise**2 + read_noise[gain_mode]**2)
+		snr = signal / np.sqrt(shot_noise**2 + dark_noise + read_noise[gain_mode]**2)
 		snr[saturated] = 0
 		
 		snr_list.append(snr) 
@@ -302,7 +298,7 @@ def create_image(im_frame_size,exp_time,sources=[],band='fuv',gain_mode='high'):
     im_read[im_read < 0] = 0
     
     # Finally, convert to ADU
-    im_adu = im_read * gain[gain_mode]
+    im_adu = im_read / gain[gain_mode]
 
     return im_adu
 
