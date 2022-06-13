@@ -361,10 +361,10 @@ def load_by_filepath(filepaths,**kwargs):
 
 	
 def scan_headers(directory,custom_keys=[]):
-	'''
-	Scan the FITS headers in given directory and return file details
-	
-	Parameters
+    '''
+    Scan the FITS headers in given directory and return file details
+    
+    Parameters
     ----------
     directory : string
     	Path to the directory to scan
@@ -377,36 +377,40 @@ def scan_headers(directory,custom_keys=[]):
     -------
     Astropy Table of FITS header contents of files in given directory 
     '''	
-	table_rows = []
-	for f in os.listdir(directory):
-		filepath = os.path.join(directory, f)
-		if os.path.isfile(filepath):
-    		# Open fits file to view header
-			cmost_file = fits.open(filepath)
-			hdr = cmost_file[0].header
-			cmost_file.close()
-			
-			# List the default properties
-			row = [filepath, hdr['READOUTM'], datetime.fromisoformat(hdr['DATE']),
-					float(hdr.get('EXPTIME',-1)), float(hdr.get('LED',-1)), 
-					float(hdr.get('TEMP',-1)), hdr.get('CAMERAID',''), 
-					hdr.get('DETID',''), hdr.get('GAIN','')]
-			
-			# Add in any custom keys
-			for k in custom_keys:
-				# If key not found, default to None
-				row.append(hdr.get(k,None))
-    		
-			# Create table row
-			table_rows.append(row)
-	
-	# Define column names
-	col_names = ['FILEPATH', 'READOUTM', 'DATE', 'EXPTIME', 'LED', 'TEMP', 
-					'CAMERAID', 'DETID', 'GAIN']
-	col_names.extend(custom_keys)
-	
-	# Construct astropy table
-	t = Table(rows=table_rows, names=col_names)
-	
-	return t
+    table_rows = []
+    for f in os.listdir(directory):
+        filepath = os.path.join(directory, f)
+        if os.path.isfile(filepath):
+            # Open fits file to view header
+            try:
+                cmost_file = fits.open(filepath)
+                hdr = cmost_file[0].header
+                cmost_file.close()
+            except:
+                print("Couldn't open {}, ignoring".format(filepath))
+            
+            # List the default properties
+            row = [filepath, hdr.get('READOUTM','DEFAULT'),
+                    datetime.fromisoformat(hdr['DATE']),
+                    float(hdr.get('EXPTIME',-1)), float(hdr.get('LED',-1)),
+                    float(hdr.get('TEMP',-1)), hdr.get('CAMERAID',''),
+                    hdr.get('DETID',''), hdr.get('GAIN','')]
+            
+            # Add in any custom keys
+            for k in custom_keys:
+                # If key not found, default to None
+                row.append(hdr.get(k,None))
+            
+            # Create table row
+            table_rows.append(row)
+    
+    # Define column names
+    col_names = ['FILEPATH', 'READOUTM', 'DATE', 'EXPTIME', 'LED', 'TEMP',
+                'CAMERAID', 'DETID', 'GAIN']
+    col_names.extend(custom_keys)
+    
+    # Construct astropy table
+    t = Table(rows=table_rows, names=col_names)
+    
+    return t
 
