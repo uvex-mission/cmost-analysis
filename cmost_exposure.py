@@ -388,6 +388,7 @@ def scan_headers(directory,custom_keys=[]):
                 cmost_file.close()
             except:
                 print("Couldn't open {}, ignoring".format(filepath))
+                continue
             
             # List the default properties
             row = [filepath, hdr.get('READOUTM','DEFAULT'),
