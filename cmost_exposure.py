@@ -125,7 +125,6 @@ class Exposure():
 		if len(cmost_file) > 1:
 			# Create an array of useable frames
 			frame_shape = cmost_file[1].data.shape	
-		
 			# This file will have at least one unusable frame
 			if self.readout_mode in ['DEFAULT','ROLLINGRESET','ROLLINGRESET_HDR']:
 				# Ignore 0th extension and first frame (data is meaningless)
@@ -158,8 +157,9 @@ class Exposure():
 		if self.readout_mode in ['DEFAULT','ROLLINGRESET','PSEUDOGLOBALRESET']:
 			# CDS columns are laid out side by side
 			oldshape = self.raw_frames.shape
+			AmpNb = oldshape[2]//512
 			image = np.reshape(self.raw_frames, 
-							(oldshape[0], oldshape[1]*256, 2, oldshape[2]//256//2),
+							(oldshape[0], oldshape[1]*(oldshape[2]//AmpNb//2), 2, AmpNb),#oldshape[2]//256//2
 							order='F')
 			cds_image = image[:,:,0,:] - image[:,:,1,:]
 			self.cds_frames = np.reshape(cds_image, 
