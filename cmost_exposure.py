@@ -440,6 +440,10 @@ def scan_headers(directory,custom_keys=[]):
                 # Create table row
                 table_rows.append(row)
         
+        if len(table_rows) == 0:
+            print(f'No files in {directory}')
+            return False
+        
         # Define column names
         col_names = ['FILEPATH', 'READOUTM', 'DATE', 'EXPTIME', 'LED', 'TEMP',
                     'CAMERAID', 'DETID', 'GAIN', 'FIRMWARE', 'TPIXEL_H']
@@ -452,6 +456,5 @@ def scan_headers(directory,custom_keys=[]):
     
     else:
         print(f'No files in {directory}')
-        
         return False
 
