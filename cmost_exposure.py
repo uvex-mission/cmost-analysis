@@ -125,7 +125,7 @@ class Exposure():
         self.camera_id = cmost_hdr.get('CAMERAID','')
         self.det_id = cmost_hdr.get('DETID','')
         if self.readout_mode in ['ROLLINGRESET_HDR']:
-            self.gain = 'HDR' # Gain header set not always consistent for HDR mode
+            self.gain = 'hdr' # Gain header set not always consistent for HDR mode
         else:
             self.gain = cmost_hdr.get('GAIN','')
         self.firmware = cmost_hdr.get('FIRMWARE','')
@@ -403,43 +403,55 @@ def scan_headers(directory,custom_keys=[]):
     Returns
     -------
     Astropy Table of FITS header contents of files in given directory 
-    '''	
-    table_rows = []
-    for f in os.listdir(directory):
-        filepath = os.path.join(directory, f)
-        if os.path.isfile(filepath):
-            # Open fits file to view header
-            try:
-                cmost_file = fits.open(filepath)
-                hdr = cmost_file[0].header
-                cmost_file.close()
-            except:
-                print("Couldn't open {}, ignoring".format(filepath))
-                continue
-            
-            # List the default properties
-            row = [filepath, hdr.get('READOUTM','DEFAULT'),
-                    datetime.fromisoformat(hdr['DATE']),
-                    float(hdr.get('EXPTIME',-1)), float(hdr.get('LED',-1)),
-                    float(hdr.get('TEMP',-1)), hdr.get('CAMERAID',''),
-                    hdr.get('DETID',''), hdr.get('GAIN',''),
-                    hdr.get('FIRMWARE',''), float(hdr.get('TPIXEL_H',-1))]
-            
-            # Add in any custom keys
-            for k in custom_keys:
-                # If key not found, default to None
-                row.append(hdr.get(k,None))
-            
-            # Create table row
-            table_rows.append(row)
+    '''
+    if len(os.listdir(directory)) > 0:
+        table_rows = []
+        for f in os.listdir(directory):
+            filepath = os.path.join(directory, f)
+            if os.path.isfile(filepath):
+                # Open fits file to view header
+                try:
+                    cmost_file = fits.open(filepath)
+                    hdr = cmost_file[0].header
+                    cmost_file.close()
+                except:
+                    print("Couldn't open {}, ignoring".format(filepath))
+                    continue
+                    
+                # Set gain key word
+                if hdr.get('READOUTM') in ['ROLLINGRESET_HDR']:
+                    gain = 'hdr'
+                else:
+                    gain = hdr.get('GAIN','')
+                
+                # List the default properties
+                row = [filepath, hdr.get('READOUTM','DEFAULT'),
+                        hdr.get('DATE','0001-01-01T00:00:00'),
+                        float(hdr.get('EXPTIME',-1)), float(hdr.get('LED',-1)),
+                        float(hdr.get('TEMP',-1)), hdr.get('CAMERAID',''),
+                        hdr.get('DETID',''), gain,
+                        hdr.get('FIRMWARE',''), float(hdr.get('TPIXEL_H',-1))]
+                
+                # Add in any custom keys
+                for k in custom_keys:
+                    # If key not found, default to None
+                    row.append(hdr.get(k,None))
+                
+                # Create table row
+                table_rows.append(row)
+        
+        # Define column names
+        col_names = ['FILEPATH', 'READOUTM', 'DATE', 'EXPTIME', 'LED', 'TEMP',
+                    'CAMERAID', 'DETID', 'GAIN', 'FIRMWARE', 'TPIXEL_H']
+        col_names.extend(custom_keys)
+        
+        # Construct astropy table
+        t = Table(rows=table_rows, names=col_names)
+        
+        return t
     
-    # Define column names
-    col_names = ['FILEPATH', 'READOUTM', 'DATE', 'EXPTIME', 'LED', 'TEMP',
-                'CAMERAID', 'DETID', 'GAIN', 'FIRMWARE', 'TPIXEL_H']
-    col_names.extend(custom_keys)
-    
-    # Construct astropy table
-    t = Table(rows=table_rows, names=col_names)
-    
-    return t
+    else:
+        print(f'No files in {directory}')
+        
+        return False
 
