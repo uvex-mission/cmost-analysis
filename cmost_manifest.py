@@ -18,6 +18,7 @@ def create_manifest(data_dir, filename):
         directories = manifest['DIRECTORY']
         m.close()
     else:
+        directories = []
         manifest = Table()
 
     # Loop through all available directories
@@ -35,8 +36,8 @@ def create_manifest(data_dir, filename):
             if header_table:
                 header_table.add_column([dir.name]*len(header_table),name='DIRECTORY')
                 manifest = vstack([manifest,header_table])
-            
-    manifest.write(filename)
+    
+    manifest.write(filename, overwrite=True)
 
 if __name__ == '__main__':
 

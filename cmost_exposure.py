@@ -413,24 +413,42 @@ def scan_headers(directory,custom_keys=[]):
                 try:
                     cmost_file = fits.open(filepath)
                     hdr = cmost_file[0].header
+                    hdu = len(cmost_file)
                     cmost_file.close()
                 except:
                     print("Couldn't open {}, ignoring".format(filepath))
                     continue
                     
                 # Set gain key word
+                readout_mode = hdr.get('READOUTM','DEFAULT')
                 if hdr.get('READOUTM') in ['ROLLINGRESET_HDR']:
                     gain = 'hdr'
                 else:
                     gain = hdr.get('GAIN','')
+                    
+                # Do exposure time math
+                if hdr.get('LONGEXPO') == 1:
+                    # Exposure time in s
+                    exp_time = float(hdr.get('EXPTIME',-1))
+                else:
+                    # Exposure time in ms
+                    exp_time = float(hdr.get('EXPTIME',-1000)) / 1000.
+                
+                # Get number of exposures in this file
+                if readout_mode in ['DEFAULT','ROLLINGRESET','ROLLINGRESET_HDR']:
+                    # Ignore 0th extension and first frame (data is meaningless)
+                    num_exp = hdu - 2
+                else:
+                    # Just ignore 0th Extension
+                    num_exp = hdu - 1
                 
                 # List the default properties
-                row = [filepath, hdr.get('READOUTM','DEFAULT'),
+                row = [filepath, readout_mode,
                         hdr.get('DATE','0001-01-01T00:00:00'),
-                        float(hdr.get('EXPTIME',-1)), float(hdr.get('LED',-1)),
+                        exp_time, float(hdr.get('LED',-1)),
                         float(hdr.get('TEMP',-1)), hdr.get('CAMERAID',''),
-                        hdr.get('DETID',''), gain,
-                        hdr.get('FIRMWARE',''), float(hdr.get('TPIXEL_H',-1))]
+                        hdr.get('DETID',''), gain, hdr.get('FIRMWARE',''),
+                        float(hdr.get('TPIXEL_H',-1)), num_exp]
                 
                 # Add in any custom keys
                 for k in custom_keys:
@@ -446,7 +464,7 @@ def scan_headers(directory,custom_keys=[]):
         
         # Define column names
         col_names = ['FILEPATH', 'READOUTM', 'DATE', 'EXPTIME', 'LED', 'TEMP',
-                    'CAMERAID', 'DETID', 'GAIN', 'FIRMWARE', 'TPIXEL_H']
+                    'CAMERAID', 'DETID', 'GAIN', 'FIRMWARE', 'TPIXEL_H', 'NUM_EXP']
         col_names.extend(custom_keys)
         
         # Construct astropy table
