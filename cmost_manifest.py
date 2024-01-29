@@ -1,7 +1,7 @@
 '''
     Script to create a manifest of available CMOST data
     
-    Usage: cmost_manifest.py [DATA_DIR] [FILENAME]
+    Usage: python cmost_manifest.py [DATA_DIR] [PATH_TO_FILE]
 '''
 import os, sys
 sys.path.append('..')
@@ -12,10 +12,13 @@ from cmost_exposure import scan_headers
 
 def create_manifest(data_dir, filename):
     # Load manifest file
-    m = fits.open(filename)
-    manifest = Table(m[1].data)
-    directories = manifest['DIRECTORY']
-    m.close()
+    if os.path.isfile(filename):
+        m = fits.open(filename)
+        manifest = Table(m[1].data)
+        directories = manifest['DIRECTORY']
+        m.close()
+    else:
+        manifest = Table()
 
     # Loop through all available directories
     for dir in os.scandir(data_dir):
