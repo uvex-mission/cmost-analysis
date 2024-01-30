@@ -426,7 +426,7 @@ def scan_headers(directory,custom_keys=[]):
                 else:
                     gain = hdr.get('GAIN','')
                     
-                # Do exposure time math
+                # Do exposure time math so that everything is in seconds
                 if hdr.get('LONGEXPO') == 1:
                     # Exposure time in s
                     exp_time = float(hdr.get('EXPTIME',-1))
@@ -441,11 +441,19 @@ def scan_headers(directory,custom_keys=[]):
                 else:
                     # Just ignore 0th Extension
                     num_exp = hdu - 1
+                    
+                # LED should be a voltage i.e. float but has sometimes been used inconsistently
+                led = hdr.get('LED',-1)
+                try:
+                    led = float(led)
+                except:
+                    # Handle safely if it's a non-numeric string
+                    led = -1.
                 
                 # List the default properties
                 row = [filepath, readout_mode,
                         hdr.get('DATE','0001-01-01T00:00:00'),
-                        exp_time, float(hdr.get('LED',-1)),
+                        exp_time, led,
                         float(hdr.get('TEMP',-1)), hdr.get('CAMERAID',''),
                         hdr.get('DETID',''), gain, hdr.get('FIRMWARE',''),
                         float(hdr.get('TPIXEL_H',-1)), num_exp]
