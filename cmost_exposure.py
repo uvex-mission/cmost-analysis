@@ -47,7 +47,7 @@ class Exposure():
         Date and time of when image was taken
     
     exp_time : float
-        Exposure time in milliseconds
+        Exposure time in seconds
     
     led_voltage : float
         LED voltage in Volts
@@ -119,9 +119,15 @@ class Exposure():
         self.date = datetime.fromisoformat(cmost_hdr.get('DATE','0001-01-01'))
 
         # Other headers are set by the user, so cope if they are not set
-        self.exp_time = float(cmost_hdr.get('EXPTIME',-1))
         self.led_voltage = float(cmost_hdr.get('LED',-1))
         self.temperature = float(cmost_hdr.get('TEMP',-1))
+        # Do exposure time math so that everything is in seconds
+        if cmost_hdr.get('LONGEXPO') == 1:
+            # Exposure time in s
+            self.exp_time = float(cmost_hdr.get('EXPTIME',-1))
+        else:
+            # Exposure time in ms, convert to s
+            self.exp_time = float(cmost_hdr.get('EXPTIME',-1000)) / 1000.
         self.camera_id = cmost_hdr.get('CAMERAID','')
         self.det_id = cmost_hdr.get('DETID','')
         if self.readout_mode in ['ROLLINGRESET_HDR']:
@@ -251,7 +257,7 @@ class Exposure():
         Device Size: {} x {} pixels
         Date: {}
         Readout mode: {}
-        Exposure time: {} ms
+        Exposure time: {} s
         LED voltage: {} V
         Temperature: {} K
         TPixel Hold: {}
