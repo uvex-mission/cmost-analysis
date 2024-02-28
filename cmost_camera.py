@@ -152,7 +152,8 @@ def standard_analysis_exposures(camid,detid):
     
     # Linearity/PTC illuminated flat field exposures of increasing exposure time
     # Switch on LED
-    cam.setled(1.7)
+    cam.setled(1.7) #Voltage TBD
+    time.sleep(300) # Wait for LED to settle, 5 min
     cam.key('LED=1.7//LED voltage in Volts')
     print('Taking illuminated flat field exposures (1 hour)...')
     for g in ['high','low','hdr']:
@@ -167,9 +168,6 @@ def standard_analysis_exposures(camid,detid):
     cam.setled(0)
     cam.close()
     print('Total time elapsed: '+str(time.time() - start)+' s')
-    
-    # Other notes:
-    # use "KEY=." (i.e. set equal to a period) to remove the keyword "KEY"
 
     
 def long_darks(camid,detid,gain):
@@ -329,5 +327,7 @@ Usage:
     # Ultralong darks (12 hr, one gain mode at a time)
     # Temperature-dependent darks?
     # PPL 'standard' set?
+    # Other notes:
+    # use "KEY=." (i.e. set equal to a period) to remove the keyword "KEY"
     '''
 
