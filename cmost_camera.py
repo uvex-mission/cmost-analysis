@@ -247,7 +247,10 @@ def setup_camera(camid,detid):
     cam.setled(-0.1)
     cam.key('LED=-0.1//LED voltage in Volts')
     print('LED off')
-    
+   
+    # Activate Clocks
+    cam.set_param('Start',1)
+ 
     return basename
 
 
