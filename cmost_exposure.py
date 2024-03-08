@@ -368,8 +368,15 @@ def load_by_file_prefix(file_prefix,**kwargs):
     -------
     List of Exposure objects
     '''
-    directory = os.path.dirname(file_prefix)
-    filepaths = [os.path.join(directory, f) for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+    if os.path.isdir(file_prefix):
+        directory = file_prefix
+        
+        filepaths = [os.path.join(directory, f) for f in os.listdir(directory)]
+    else:
+        directory = os.path.dirname(file_prefix)
+        prefix = os.path.basename(file_prefix)
+    
+        filepaths = [os.path.join(directory, f) for f in os.listdir(directory) if prefix in f]
 
     return load_by_filepath(filepaths,**kwargs)
 
