@@ -38,6 +38,10 @@ def create_manifest(data_dir, filename):
                 header_table['DETID'] = header_table['DETID'].astype(str)
                 header_table.add_column([dir.name]*len(header_table),name='DIRECTORY')
                 manifest = vstack([manifest,header_table])
+                
+                print(f'Adding {len(header_table)} new files')
+            else:
+                print('No new files to add')
     
     manifest.write(filename, overwrite=True)
 
