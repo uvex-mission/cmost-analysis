@@ -20,6 +20,8 @@ def create_manifest(data_dir, filename):
     else:
         directories = []
         manifest = Table()
+        
+    orig_len = len(manifest)
 
     # Loop through all available directories
     for dir in os.scandir(data_dir):
@@ -39,11 +41,13 @@ def create_manifest(data_dir, filename):
                 header_table.add_column([dir.name]*len(header_table),name='DIRECTORY')
                 manifest = vstack([manifest,header_table])
                 
-                print(f'Adding {len(header_table)} new files')
-            else:
-                print('No new files to add')
-    
     manifest.write(filename, overwrite=True)
+                
+    new_len = len(manifest)
+    if new_len > orig_len:
+        print(f'Added {new_len-orig_len} new files')
+    else:
+        print('No new files added')
 
 if __name__ == '__main__':
 
