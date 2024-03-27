@@ -34,6 +34,8 @@ def create_manifest(data_dir, filename):
             
             # scan_headers() returns False if directory contains no files
             if header_table:
+                # Handle numeric detector IDs
+                header_table['DETID'] = header_table['DETID'].astype(str)
                 header_table.add_column([dir.name]*len(header_table),name='DIRECTORY')
                 manifest = vstack([manifest,header_table])
     
