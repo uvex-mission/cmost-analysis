@@ -185,8 +185,7 @@ def get_snr(count_rate, exp_times, band='fuv', gain_mode='high'):
 
 		# Calculate shot noise and dark noise
 		shot_noise = np.sqrt(signal + sky_bgd).value * u.electron
-		dark_noise = dark_current * t
-
+		dark_noise = (dark_current * t).value * u.electron**2 # This is to make following eqn work
 
 		# Get SNR
 		snr = signal / np.sqrt(shot_noise**2 + dark_noise + read_noise[gain_mode]**2)
@@ -303,3 +302,43 @@ def create_image(im_frame_size,exp_time,sources=[],band='fuv',gain_mode='high'):
 
     return im_adu
 
+def perform_hdr(images, saturation, gains, exp_times):
+    ''' HDR algorithm to iterate through exposure times and select pixels from as long an exposure as possible
+    
+    Parameters
+    ----------
+    images : 3-D float array
+        Array of input 2-D images
+        First dimension must be same length as exp_times
+        Must be in long->short exposure time order, with high-gain frames
+        before low-gain frames
+        
+    saturation: float array
+        The ADU threshold at which we define saturation for each frame
+        This varies with gain mode so we define it for each frame
+        
+    gains: string array
+        The gain for each image, either 'low' or 'high'
+        
+    exp_times: float array
+        Array of exposure times in seconds
+        
+    Returns
+    -------
+    hdr_image : 2-D float array
+        2-D image selected from images based on exp_times and saturation in e/s
+    '''
+    hdr_image = -np.ones(images.shape[1:]) * u.electron/u.s
+    
+    # Loop through the input images
+    for i, im in enumerate(images):
+        # Define the unsaturated region of the current frame where the
+        # final image has not already been filled in by a previous frame
+        not_sat = (hdr_image == -1) & (im < saturation[i])
+        
+        hdr_image[not_sat] = im[not_sat] * gain[gains[i]] / exp_times[i]
+        
+    # Any additional -1 pixels are saturated in all frames. Do something?
+    
+    return hdr_image
+    
