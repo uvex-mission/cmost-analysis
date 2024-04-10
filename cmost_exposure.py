@@ -63,6 +63,7 @@ class Exposure():
         
     dev_size : tuple
         Device size in pixels as (width, height)
+        Will instead store the guiding row size for GUIDING readout mode
     
     gain : string
         Gain mode being used
@@ -131,7 +132,7 @@ class Exposure():
         self.camera_id = cmost_hdr.get('CAMERAID','')
         self.det_id = cmost_hdr.get('DETID','')
         if self.readout_mode in ['ROLLINGRESET_HDR']:
-            self.gain = 'hdr' # Gain header set not always consistent for HDR mode
+            self.gain = 'hdr' # Gain header is not always consistently set for HDR mode
         else:
             self.gain = cmost_hdr.get('GAIN','')
         self.firmware = cmost_hdr.get('FIRMWARE','')
@@ -175,7 +176,7 @@ class Exposure():
         Perform necessary CDS operation based on the readout mode on all useable frames
         '''
         col_width = 256 # Column width in pixels
-        if self.readout_mode in ['DEFAULT','ROLLINGRESET','PSEUDOGLOBALRESET']:
+        if self.readout_mode in ['DEFAULT','ROLLINGRESET','PSEUDOGLOBALRESET','GUIDING']:
             # CDS columns are laid out side by side width-wise
             oldshape = self.raw_frames.shape
             AmpNb = oldshape[2]//(col_width*2) # Number of amplifiers
@@ -248,13 +249,19 @@ class Exposure():
         hdr_string = ''
         if self.readout_mode in ['ROLLINGRESET_HDR']:
             hdr_string = ' x 2'
+        
+        device_string = ''
+        if self.readout_mode in ['GUIDING']:
+            device_string = 'Guiding Row'
+        else:
+            device_string = 'Device'
 
         # Create info string
         info_string = """ Properties:
         Firmware: {}
         Camera ID: {}
         Detector ID: {}
-        Device Size: {} x {} pixels
+        {} Size: {} x {} pixels
         Date: {}
         Readout mode: {}
         Exposure time: {} s
@@ -265,7 +272,7 @@ class Exposure():
         Number of frames: {}{} frames
         {}
         """.format(self.firmware, self.camera_id, self.det_id,
-                    self.dev_size[0], self.dev_size[1],
+                    device_string, self.dev_size[0], self.dev_size[1],
                     self.date.isoformat(), self.readout_mode, self.exp_time,
                     self.led_voltage, self.temperature, self.tpixel_hold,
                     self.gain, len(self.cds_frames), hdr_string, custom_key_str)
