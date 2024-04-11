@@ -289,7 +289,7 @@ def take_guiding_exposure(t,gain,basename,boi_start=200,boi_size=10):
     cam.__send_command('longexposure','false')
     cam.set_param('longexposure',0)
     cam.key('LONGEXPO=0// 1|0 means exposure in s|ms')
-    set_gain('high') # Guiding pixels are read in high gain mode
+    set_gain('hdr') # Guiding pixels are read in hdr gain mode
     cam.set_mode('GUIDING')
     cam.key('NORESET=1//Reset frame has been removed')
     cam.set_param('InitFrame',1)
