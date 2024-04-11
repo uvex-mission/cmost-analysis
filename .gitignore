@@ -12,6 +12,7 @@ __pycache__
 # Local data and plots
 local_data/*
 data/*
+notebooks/
 notebooks/plots/*
 
 # Other generated files
