@@ -1,4 +1,6 @@
-''' Functions relating to opening and manipulating CMOST images'''
+''' 
+    Functions relating to opening and manipulating CMOST images
+'''
 import os
 import numpy as np
 from astropy.io import fits
