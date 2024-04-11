@@ -331,7 +331,7 @@ Usage:
         else: camid = sys.argv[2]
         if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
         else: detid = sys.argv[3]
-        if len(sys.argv) < 5: detid = raw_input('Gain: ')
+        if len(sys.argv) < 5: detid = raw_input('Gain (high, low, or hdr): ')
         else: gain = sys.argv[4]
         long_darks(camid,detid,gain)
     else:
