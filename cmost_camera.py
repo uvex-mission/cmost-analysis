@@ -74,11 +74,11 @@ def standard_analysis_exposures(camid,detid):
     print('Taking FUV standard operating mode darks (2.5 hours)...')
     for i in np.arange(10):
         set_gain('low')
-        cam.set_basename(basename+'_FUVdark'+i+'_9')
+        cam.set_basename(basename+'_FUVdark'+str(i)+'_9')
         cam.key('EXPTIME=9//Exposure time in s')
         cam.expose(9,1,0)
         set_gain('hdr')
-        cam.set_basename(basename+'_FUVdark'+i+'_900')
+        cam.set_basename(basename+'_FUVdark'+str(i)+'_900')
         cam.key('EXPTIME=900//Exposure time in s')
         cam.expose(900,1,0)
     print('Time elapsed: '+str(time.time() - start)+' s')
@@ -92,11 +92,11 @@ def standard_analysis_exposures(camid,detid):
     print('Taking NUV standard operating mode darks (1 hour)...')
     for i in np.arange(10):
         set_gain('low')
-        cam.set_basename(basename+'_NUVdark'+i+'_3')
+        cam.set_basename(basename+'_NUVdark'+str(i)+'_3')
         cam.key('EXPTIME=3//Exposure time in s')
         cam.expose(3,1,0)
         set_gain('hdr')
-        cam.set_basename(basename+'_NUVdark'+i+'_300')
+        cam.set_basename(basename+'_NUVdark'+str(i)+'_300')
         cam.key('EXPTIME=300//Exposure time in s')
         cam.expose(300,1,0)
     print('Time elapsed: '+str(time.time() - start)+' s')
@@ -111,9 +111,9 @@ def standard_analysis_exposures(camid,detid):
     # Default 10-row band of interest at given location
     print('Taking NUV standard operating mode darks with 1 Hz guiding (1 hour)...')
     for i in np.arange(10):
-        gbasename = basename+'_NUVdarkguiding'+i+'_3'
+        gbasename = basename+'_NUVdarkguiding'+str(i)+'_3'
         take_guiding_exposure(3,'low',gbasename,boi_start=200,boi_size=10)
-        gbasename = basename+'_NUVdarkguiding'+i+'_300'
+        gbasename = basename+'_NUVdarkguiding'+str(i)+'_300'
         take_guiding_exposure(300,'hdr',gbasename,boi_start=200,boi_size=10)
     print('Time elapsed: '+str(time.time() - start)+' s')
     
