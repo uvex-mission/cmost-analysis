@@ -150,8 +150,12 @@ class Exposure():
             frame_shape = cmost_file[1].data.shape
             # This file will have at least one unusable frame
             if self.readout_mode in ['DEFAULT','ROLLINGRESET','ROLLINGRESET_HDR']:
-                # Ignore 0th extension and first frame (data is meaningless)
-                ignore_ext = 2
+                if cmost_hdr.get('NORESET') == 1:
+                    # Reset frame not saved, just ignore 0th Extension
+                    ignore_ext = 1
+                else:
+                    # Ignore 0th extension and first frame (dummy reset frame is meaningless)
+                    ignore_ext = 2
             else:
                 # Just ignore 0th Extension
                 ignore_ext = 1

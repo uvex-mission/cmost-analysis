@@ -50,11 +50,12 @@ def standard_analysis_exposures(camid,detid):
     # Wait 10 mins for biases to settle
     print('Waiting for biases to settle (10 mins)...')
     time.sleep(600)
+    print('Time elapsed: '+str(time.time() - start)+' s')
     
     # Take analysis exposures
 
     # Minimum-length dark frames - 20 frames for each gain mode
-    print('Taking bias frames (3 min)...')
+    print('Taking bias frames (~1 min)...')
     cam.key('EXPTIME=0//Exposure time in ms')
     cam.set_param('InitFrame',1) # Apply initial reset frame but don't capture resulting image
     cam.key('NORESET=1//Reset frame has been removed')
@@ -132,7 +133,10 @@ def standard_analysis_exposures(camid,detid):
     # Linearity/PTC illuminated flat field exposures of increasing exposure time
     # Switch on LED
     cam.setled(1.7) #Voltage TBD
+    print('Waiting for LED to settle...')
     time.sleep(300) # Wait for LED to settle, 5 min
+    print('Time elapsed: '+str(time.time() - start)+' s')
+    
     cam.key('LED=1.7//LED voltage in Volts')
     print('Taking illuminated flat field exposures (1 hour)...')
     for g in ['high','low','hdr']:
@@ -172,6 +176,7 @@ def long_darks(camid,detid,gain):
     # Wait 10 mins for biases to settle
     print('Waiting for biases to settle (10 mins)...')
     time.sleep(600)
+    print('Time elapsed: '+str(time.time() - start)+' s')
     
     # Switch to longexposure mode
     cam.__send_command('longexposure','true')
@@ -193,6 +198,7 @@ def long_darks(camid,detid,gain):
             cam.set_basename(basename+'_longdark'+ind+'_short'+gain)
             cam.key('EXPTIME=3//Exposure time in seconds')
             cam.expose(3,10,0)
+            print('Time elapsed: '+str(time.time() - start)+' s')
 
     # Switch off LED and camera
     print('Exposures complete, shutting down camera')
@@ -289,7 +295,7 @@ def take_guiding_exposure(t,gain,basename,boi_start=200,boi_size=10):
     cam.__send_command('longexposure','false')
     cam.set_param('longexposure',0)
     cam.key('LONGEXPO=0// 1|0 means exposure in s|ms')
-    set_gain('hdr') # Guiding pixels are read in hdr gain mode
+    set_gain('high') # Guiding pixels are read in high gain mode
     cam.set_mode('GUIDING')
     cam.key('NORESET=1//Reset frame has been removed')
     cam.set_param('InitFrame',1)
@@ -319,7 +325,7 @@ Usage:
 
     # Pick the exposure set to execute
     if sys.argv[1] == 'standard':
-        print('Taking standard exposure set (~4.5 hours)')
+        print('Taking standard exposure set (~5.5 hours)')
         if len(sys.argv) < 3: camid = raw_input('Camera ID (cmost or cmostjpl): ')
         else: camid = sys.argv[2]
         if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
