@@ -361,7 +361,7 @@ Inputs:
     first_exp:  flag to identify if InitFrame is required or not (only needed
                 for initial frame)
 '''
-def exp_UVEX_NUV_dwell(basename, first_exp): 
+def exp_UVEX_NUV_dwell(basename): 
     # Three exp_UVEX_NUV exposures with guiding for 900 second dwell
     for i in np.arange(3):
         if i == 1:
