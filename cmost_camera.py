@@ -351,6 +351,51 @@ Usage:
     # Other notes:
     # use "KEY=." (i.e. set equal to a period) to remove the keyword "KEY"
 
+'''
+Description:    Function to take a full 900s(+9s) dwell sequnece for NUV with guiding.
+                Simply three NUV exposures in a row. HDR frame for short exposure.
+                Extra logic to ensure InitFrame is only taken and trashed once.
+
+Inputs:
+    basename:   exposure_file_name
+    first_exp:  flag to identify if InitFrame is required or not (only needed
+                for initial frame)
+'''
+def exp_UVEX_NUV_dwell(basename, first_exp): 
+    # Three exp_UVEX_NUV exposures with guiding for 900 second dwell
+    for i in np.arange(3):
+        if i == 1:
+            first_exp = True
+        else:
+            first_exp = False
+        exp_UVEX_NUV_HDR(basename+"_FullDwell_exp"+i,first_exp)
+    cam.set_param('InitFrame,1') # End of dwell sequence; enable InitFrame
+
+def exp_UVEX_NUV_HDR(basename,first_exp): # NUX Exposure with guiding
+    # Starts with 3s of guiding followed by a low gain readout followed by 300s of guiding followed by and HDR readout
+    cam.__send_command('longexposure','false')
+    cam.set_param('longexposure',0)
+    cam.key('longexposure=0// 1|0 means exposure in s|ms')
+    set_gain('high') #Guiding pixels are in high gain mode
+    cam.set_mode('GUIDING')
+    cam.set_param('BOI_start',200) # First row of the Band Of Interest
+    if first_exp:
+        cam.set_param('InitFrame',1) # will apply initial reset frame but doesn't not capture the resulting image
+    cam.set_basename(basename+'_UVEXNUV_1_3sguiding_')
+    cam.expose(1000,3,0) # 3 Guiding Frames at 1 Hz
+    if first_exp:
+        cam.set_param('InitFrame',0) # we do not want a reset frame before readout here.
+    set_gain('hdr') # Mode to Full Frame HDR Rolling Reset
+    cam.set_basename(basename+'_UVEXNUV_2_hdr_short_')
+    cam.expose(0,1,0) # Low Gain Frame
+    set_gain('high')
+    cam.set_mode('GUIDING') #
+    cam.set_basename(basename+'_UVEXNUV_3_300sguiding_')
+    cam.expose(1000,300,0) # 300 Guiding Frames
+    set_gain('hdr') # Mode to Full Frame HDR Rolling Reset
+    cam.set_basename(basename+'_UVEXNUV_4_hdr_')
+    cam.expose(0,1,0)
+    # cam.set_param('InitFrame',1) # InitFrame will be handled in dwell sequence
 
 ''' Old test functions:
 
