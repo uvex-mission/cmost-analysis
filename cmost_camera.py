@@ -368,8 +368,8 @@ def exp_UVEX_NUV_dwell(basename):
             first_exp = True
         else:
             first_exp = False
-        exp_UVEX_NUV_HDR(basename+"_FullDwell_exp"+i,first_exp)
-    cam.set_param('InitFrame,1') # End of dwell sequence; enable InitFrame
+        exp_UVEX_NUV_HDR(basename+"_FullDwell_exp"+str(i),first_exp)
+    cam.set_param('InitFrame',1) # End of dwell sequence; enable InitFrame
 
 def exp_UVEX_NUV_HDR(basename,first_exp): # NUX Exposure with guiding
     # Starts with 3s of guiding followed by a low gain readout followed by 300s of guiding followed by and HDR readout
