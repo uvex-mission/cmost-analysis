@@ -81,7 +81,7 @@ def standard_analysis_exposures(camid,detid):
         cam.set_basename(basename+'_FUVdark'+str(i)+'_900')
         cam.key('EXPTIME=900//Exposure time in s')
         cam.expose(900,1,0)
-    print('Time elapsed: '+str(time.time() - start)+' s')
+        print('Time elapsed: '+str(time.time() - start)+' s')
     
     # Get temperature again since some time has passed
     temptime, temp = get_temp(cmost=c)
@@ -98,7 +98,7 @@ def standard_analysis_exposures(camid,detid):
         cam.set_basename(basename+'_NUVdark'+str(i)+'_300')
         cam.key('EXPTIME=300//Exposure time in s')
         cam.expose(300,1,0)
-    print('Time elapsed: '+str(time.time() - start)+' s')
+        print('Time elapsed: '+str(time.time() - start)+' s')
 
     # Get temperature again
     temptime, temp = get_temp(cmost=c)
@@ -116,7 +116,7 @@ def standard_analysis_exposures(camid,detid):
         #take_guiding_exposure(3,'hdr',gbasename,boi_start=200,boi_size=10)
         #gbasename = basename+'_NUVguidingdark'+str(i)+'_300'
         #take_guiding_exposure(300,'hdr',gbasename,boi_start=200,boi_size=10)
-    print('Time elapsed: '+str(time.time() - start)+' s')
+        print('Time elapsed: '+str(time.time() - start)+' s')
     
     # Get temperature again
     temptime, temp = get_temp(cmost=c)
@@ -140,6 +140,7 @@ def standard_analysis_exposures(camid,detid):
     cam.key('LED=1.7//LED voltage in Volts')
     print('Taking illuminated flat field exposures (~4 hours)...')
     for g in ['high','low','hdr']:
+        print(f'Flats for {g} gain')
         set_gain(g)
         # Loop through exposure times between 1 and ~1260s
         # Two exposures per exposure time for PTC generation
@@ -147,6 +148,7 @@ def standard_analysis_exposures(camid,detid):
             cam.set_basename(basename+'_flat_'+g)
             cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
             cam.expose(int(t),2,0)
+        print('Time elapsed: '+str(time.time() - start)+' s')
 
     # Switch off LED and camera
     print('Exposures complete, shutting down camera')
