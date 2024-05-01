@@ -18,7 +18,7 @@ from pyarchon import cmost as cam
 from cmost_utils import get_temp
 
 
-def dwelltest():
+def dwelltest(camid,detid):
     basename = setup_camera(camid,detid)
     start = time.time()
     print('Taking test NUV guiding dwell')
@@ -341,6 +341,8 @@ def exp_UVEX_NUV_dwell(basename):
     cam.set_param('InitFrame',1) # End of dwell sequence; enable InitFrame
 
 def exp_UVEX_NUV_HDR(basename,first_exp): # NUX Exposure with guiding
+    print('Beginning NUV guiding HDR cycle')
+    nuvtime = time.time()
     # Starts with 3s of guiding followed by a low gain readout followed by 300s of guiding followed by and HDR readout
     cam.__send_command('longexposure','false')
     cam.set_param('longexposure',0)
@@ -350,20 +352,25 @@ def exp_UVEX_NUV_HDR(basename,first_exp): # NUX Exposure with guiding
     cam.set_param('BOI_start',200) # First row of the Band Of Interest
     if first_exp:
         cam.set_param('InitFrame',1) # will apply initial reset frame but doesn't not capture the resulting image
+    print('NUV short exp setup done, time elapsed: '+str(time.time() - nuvtime)+' s') # Should be negligible
     cam.set_basename(basename+'_UVEXNUV_1_3sguiding_')
     cam.expose(1000,3,0) # 3 Guiding Frames at 1 Hz
+    print('3 guiding frames taken, time elapsed: '+str(time.time() - nuvtime)+' s')
     if first_exp:
         cam.set_param('InitFrame',0) # we do not want a reset frame before readout here.
     set_gain('hdr') # Mode to Full Frame HDR Rolling Reset
     cam.set_basename(basename+'_UVEXNUV_2_hdr_short_')
     cam.expose(0,1,0) # Low Gain Frame
+    print('Short frame readout done, time elapsed: '+str(time.time() - nuvtime)+' s')
     set_gain('high')
     cam.set_mode('GUIDING') #
     cam.set_basename(basename+'_UVEXNUV_3_300sguiding_')
     cam.expose(1000,300,0) # 300 Guiding Frames
+    print('300 guiding frames taken, time elapsed: '+str(time.time() - nuvtime)+' s')
     set_gain('hdr') # Mode to Full Frame HDR Rolling Reset
     cam.set_basename(basename+'_UVEXNUV_4_hdr_')
     cam.expose(0,1,0)
+    print('Long frame readout done, total time elapsed: '+str(time.time() - nuvtime)+' s')
     # cam.set_param('InitFrame',1) # InitFrame will be handled in dwell sequence
     
 
@@ -372,6 +379,9 @@ if __name__ == '__main__':
     Usage:
     python cmost_camera.py EXPOSURESET CAMID DETID
     '''
+    print('Executing dwell test')
+    dwelltest('cmost','test')
+    exit()
 
     # Get command line parameters
     if len(sys.argv) < 3:
