@@ -17,6 +17,16 @@ from datetime import datetime
 from pyarchon import cmost as cam
 from cmost_utils import get_temp
 
+
+def dwelltest():
+    basename = setup_camera(camid,detid)
+    start = time.time()
+    print('Taking test NUV guiding dwell')
+    exp_UVEX_NUV_dwell(basename+'_NUVguidingdark_test')
+    print('Total time elapsed: '+str(time.time() - start)+' s')
+    cam.close()
+
+
 def standard_analysis_exposures(camid,detid):
     '''
     Function to take all exposures required for standard analysis
@@ -140,7 +150,7 @@ def standard_analysis_exposures(camid,detid):
     cam.key('LED=1.7//LED voltage in Volts')
     print('Taking illuminated flat field exposures (~4 hours)...')
     for g in ['high','low','hdr']:
-        print(f'Flats for {g} gain')
+        print('Flats for '+g+' gain')
         set_gain(g)
         # Loop through exposure times between 1 and ~1260s
         # Two exposures per exposure time for PTC generation
@@ -310,50 +320,6 @@ def take_guiding_exposure(t,gain,basename,boi_start=200,boi_size=10):
     cam.key('EXPTIME='+str(t*1000)+'//Exposure time in milliseconds')
     cam.expose(0,1,0) # Zero-length exposure since it's been exposing throughout the guiding
 
-
-if __name__ == '__main__':
-    '''
-    Usage:
-    python cmost_camera.py EXPOSURESET CAMID DETID
-    '''
-
-    # Get command line parameters
-    if len(sys.argv) < 3:
-        print('''
-Usage:
-    python cmost_camera.py standard CAMID DETID
-    python cmost_camera.py longdark CAMID DETID GAIN
-            ''')
-        exit()
-
-    # Pick the exposure set to execute
-    if sys.argv[1] == 'standard':
-        print('Taking standard exposure set (~8 hours)')
-        if len(sys.argv) < 3: camid = raw_input('Camera ID (cmost or cmostjpl): ')
-        else: camid = sys.argv[2]
-        if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
-        else: detid = sys.argv[3]
-        standard_analysis_exposures(camid,detid)
-    elif sys.argv[1] == 'longdark':
-        print('Taking long darks (~9 hours)')
-        if len(sys.argv) < 3: camid = raw_input('Camera ID (cmost or cmostjpl): ')
-        else: camid = sys.argv[2]
-        if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
-        else: detid = sys.argv[3]
-        if len(sys.argv) < 5: detid = raw_input('Gain (high, low, or hdr): ')
-        else: gain = sys.argv[4]
-        long_darks(camid,detid,gain)
-    else:
-        print('Unknown exposure set. Options: standard, longdark')
-        exit()
-    
-
-    # Ultralong darks (12 hr, one gain mode at a time)
-    # Temperature-dependent darks?
-    # PPL 'standard' set?
-    # Other notes:
-    # use "KEY=." (i.e. set equal to a period) to remove the keyword "KEY"
-
 '''
 Description:    Function to take a full 900s(+9s) dwell sequnece for NUV with guiding.
                 Simply three NUV exposures in a row. HDR frame for short exposure.
@@ -399,6 +365,45 @@ def exp_UVEX_NUV_HDR(basename,first_exp): # NUX Exposure with guiding
     cam.set_basename(basename+'_UVEXNUV_4_hdr_')
     cam.expose(0,1,0)
     # cam.set_param('InitFrame',1) # InitFrame will be handled in dwell sequence
+    
+
+if __name__ == '__main__':
+    '''
+    Usage:
+    python cmost_camera.py EXPOSURESET CAMID DETID
+    '''
+
+    # Get command line parameters
+    if len(sys.argv) < 3:
+        print('''
+Usage:
+    python cmost_camera.py standard CAMID DETID
+    python cmost_camera.py longdark CAMID DETID GAIN
+            ''')
+        exit()
+
+    # Pick the exposure set to execute
+    if sys.argv[1] == 'standard':
+        print('Taking standard exposure set (~8 hours)')
+        if len(sys.argv) < 3: camid = raw_input('Camera ID (cmost or cmostjpl): ')
+        else: camid = sys.argv[2]
+        if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
+        else: detid = sys.argv[3]
+        standard_analysis_exposures(camid,detid)
+    elif sys.argv[1] == 'longdark':
+        print('Taking long darks (~9 hours)')
+        if len(sys.argv) < 3: camid = raw_input('Camera ID (cmost or cmostjpl): ')
+        else: camid = sys.argv[2]
+        if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
+        else: detid = sys.argv[3]
+        if len(sys.argv) < 5: detid = raw_input('Gain (high, low, or hdr): ')
+        else: gain = sys.argv[4]
+        long_darks(camid,detid,gain)
+    else:
+        print('Unknown exposure set. Options: standard, longdark')
+        exit()
+
+
 
 ''' Old test functions:
 
