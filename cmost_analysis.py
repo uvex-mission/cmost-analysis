@@ -52,7 +52,7 @@ def standard_analysis_products(dirname):
     with PdfPages(os.path.join(dirname,f'{camera}_{detid}_analysis_report.pdf')) as pdf:
     
         # Empty axes for first page
-        fig = plt.figure(figsize=[8.5,11],dpi=300)
+        fig = plt.figure(figsize=[8.5,11],dpi=250)
         plt.axis('off')
         
         # Device and test summary text
@@ -102,7 +102,7 @@ def standard_analysis_products(dirname):
         # Get darks
         #dark_present = 0
         if dark_present:
-            for mode in ['FUVdark','NUVdark','NUVdarkguiding']:
+            for mode in ['FUVdark','NUVdark','NUVguidingdark']:
                 if mode == 'FUVdark':
                     long = 900
                     short = 9
@@ -110,44 +110,51 @@ def standard_analysis_products(dirname):
                     long = 300
                     short = 3
                     
-                # Load the ten frames in temporal order
-                short_low, long_low, long_high = [], [], []
+                # Load the nine frames in temporal order
+                short_low, short_high, long_low, long_high = [], [], [], []
                 long_guideframes, short_guideframes = [], []
                 s_starts, l_starts = [], []
-                n_frame = 10
-                for i in range(n_frame):
-                    if mode == 'NUVdarkguiding':
-                        long_data = load_by_file_prefix(f'{dirname}/{camera}_{detid}_{mode}{i}_{long}_')
-                        short_data = load_by_file_prefix(f'{dirname}/{camera}_{detid}_{mode}{i}_{short}_')
-                        for l in long_data:
-                            if 'guideframes' in l.filepath:
-                                long_guideframes.append(l.cds_frames)
-                            else:
-                                long_frame = l
-                        for s in short_data:
-                            if 'guideframes' in s.filepath:
-                                short_guideframes.append(s.cds_frames)
-                            else:
-                                short_frame = s
-                    else:
+                if mode == 'NUVguidingdark':
+                    # Taken using the full-dwell function, different filename format
+                    n_dwell, n_exp = 3, 3
+                    for i in range(n_dwell):
+                        for j in range(n_exp):
+                            # Load long and short full frames
+                            long_frame = load_by_file_prefix(f'{dirname}/{camera}_{detid}_{mode}{i}_FullDwell_exp{j}_UVEXNUV_4')[0]
+                            short_frame = load_by_file_prefix(f'{dirname}/{camera}_{detid}_{mode}{i}_FullDwell_exp{j}_UVEXNUV_2')[0]
+                            
+                            long_high.append(long_frame.cds_frames[0,0])
+                            long_low.append(long_frame.cds_frames[0,1])
+                            l_starts.append(long_frame.date)
+                            
+                            short_high.append(short_frame.cds_frames[0,0])
+                            short_low.append(short_frame.cds_frames[0,1])
+                            s_starts.append(short_frame.date)
+                            
+                            # TODO: also load guiding frames
+                else:
+                    n_frame = 9
+                    for i in range(n_frame):
                         long_frame = load_by_file_prefix(f'{dirname}/{camera}_{detid}_{mode}{i}_{long}_')[0]
                         short_frame = load_by_file_prefix(f'{dirname}/{camera}_{detid}_{mode}{i}_{short}_')[0]
-                        
-                    long_high.append(long_frame.cds_frames[0,0])
-                    long_low.append(long_frame.cds_frames[0,1])
-                    l_starts.append(long_frame.date)
-                        
-                    short_low.append(short_frame.cds_frames[0])
-                    s_starts.append(short_frame.date)
+                            
+                        long_high.append(long_frame.cds_frames[0,0])
+                        long_low.append(long_frame.cds_frames[0,1])
+                        l_starts.append(long_frame.date)
+                            
+                        short_high.append(short_frame.cds_frames[0,0])
+                        short_low.append(short_frame.cds_frames[0,1])
+                        s_starts.append(short_frame.date)
                 
                 long_high = np.stack(long_high)
                 long_low = np.stack(long_low)
+                short_high = np.stack(short_high)
                 short_low = np.stack(short_low)
                 
                 # For each resulting median frame, print a page of plots
-                frames = [np.median(short_low,axis=0), np.median(long_low,axis=0), np.median(long_high,axis=0)]
-                names = ['short low-gain','long low-gain','long high-gain']
-                times = [short, long, long]
+                frames = [np.median(short_low,axis=0), np.median(short_high,axis=0), np.median(long_low,axis=0), np.median(long_high,axis=0)]
+                names = ['short low-gain','short high-gain','long low-gain','long high-gain']
+                times = [short, short, long, long]
                 
                 for j, med_dark in enumerate(frames):
                     mmin, mmax = min(med_dark.flatten()), max(med_dark.flatten())
@@ -160,18 +167,20 @@ def standard_analysis_products(dirname):
                     hist_page(pdf, med_dark, f'Dark frames - {mode} mode - {names[j]} frame', summary_text)
                 
                 # Also make a page of mean values over time
-                fig = plt.figure(figsize=[8.5,11],dpi=300)
+                fig = plt.figure(figsize=[8.5,11],dpi=250)
                 plt.suptitle(f'Dark frames - {mode} mode - mean over time')
                 
-                ax1 = plt.subplot2grid((3,1), (0,0))
-                ax2 = plt.subplot2grid((3,1), (1,0))
-                ax3 = plt.subplot2grid((3,1), (2,0))
+                ax1 = plt.subplot2grid((4,1), (0,0))
+                ax2 = plt.subplot2grid((4,1), (1,0))
+                ax3 = plt.subplot2grid((4,1), (2,0))
+                ax4 = plt.subplot2grid((4,1), (3,0))
                 
                 # Mean short-frame dark value over time (whole frame + every column)
-                sl_col_mean, ll_col_mean, lh_col_mean = [], [], []
+                sl_col_mean, sh_col_mean,ll_col_mean, lh_col_mean = [], [], [], []
                 n_cols = exp.dev_size[0]//256
                 for i in range(n_cols):
                     sl_col_mean.append(np.mean(short_low[:,:,i*256:(i+1)*256],axis=(1,2)))
+                    sh_col_mean.append(np.mean(short_high[:,:,i*256:(i+1)*256],axis=(1,2)))
                     ll_col_mean.append(np.mean(long_low[:,:,i*256:(i+1)*256],axis=(1,2)))
                     lh_col_mean.append(np.mean(long_high[:,:,i*256:(i+1)*256],axis=(1,2)))
 
@@ -182,18 +191,26 @@ def standard_analysis_products(dirname):
                 for j in range(n_cols): plt.plot(s_starts,sl_col_mean[j],alpha=0.5,label=f'Col {j}')
                 plt.ylabel('ADU')
                 plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
-                plt.legend(fontsize=10,ncol=6,loc=8,bbox_to_anchor=(0.5, -0.25))
+                plt.legend(fontsize=10,ncol=6,loc=9)
+                #plt.legend(fontsize=10,ncol=6,loc=8,bbox_to_anchor=(0.5, -0.25))
                 
-                # Mean long-frame dark value over time
                 plt.sca(ax2)
                 plt.title(f'{names[1]}')
+                plt.plot(s_starts,np.mean(short_high,axis=(1,2)),color='k',label='Whole chip')
+                for j in range(n_cols): plt.plot(s_starts,sh_col_mean[j],alpha=0.5,label=f'Col {j}')
+                plt.ylabel('ADU')
+                plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+                
+                # Mean long-frame dark value over time
+                plt.sca(ax3)
+                plt.title(f'{names[2]}')
                 plt.plot(l_starts,np.mean(long_low,axis=(1,2)),color='k',label='Whole chip')
                 for j in range(n_cols): plt.plot(l_starts,ll_col_mean[j],alpha=0.5,label=f'Col {j}')
                 plt.ylabel('ADU')
                 plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
                 
-                plt.sca(ax3)
-                plt.title(f'{names[2]}')
+                plt.sca(ax4)
+                plt.title(f'{names[3]}')
                 plt.plot(l_starts,np.mean(long_high,axis=(1,2)),color='k',label='Whole chip')
                 for j in range(n_cols): plt.plot(l_starts,lh_col_mean[j],alpha=0.5,label=f'Col {j}')
                 plt.xlabel('Time')
@@ -216,18 +233,20 @@ def standard_analysis_products(dirname):
                     gain_label.extend(['high (dual-gain)', 'low (dual-gain)'])
                     sat_flats.extend((flat_frames[max_i].cds_frames[0,0], flat_frames[max_i].cds_frames[0,1]))
                     medians = np.array([ff.get_median((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames])
-                    #variance = NEED TWO FRAMES FOR THIS!!
+                    variance = np.array([ff.get_variance((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames])
                     
                     exp_times.extend((exp,exp))
                     med_sig.extend((medians[:,0],medians[:,1]))
+                    var.extend((variance[:,0],variance[:,1]))
                 else:
                     gain_label.append(gain)
                     sat_flats.append(flat_frames[max_i].cds_frames[0])
                     medians = np.array([ff.get_median((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames])
-                    #variance = NEED TWO FRAMES FOR THIS!!
+                    variance = np.array([ff.get_variance((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames])
 
                     exp_times.append(exp)
                     med_sig.append(medians)
+                    var.append(variance)
 
             # Well depth report
             for i, flat in enumerate(sat_flats):
@@ -261,7 +280,7 @@ def standard_analysis_products(dirname):
             # PTC (TBA)
             plt.sca(ax2)
             plt.title(f'Photon Transfer Curve')
-            #for j in range(4): plt.scatter(med_sig[j],variance[j],label=f'{gain_label[j]}')
+            for j in range(4): plt.scatter(med_sig[j],var[j],label=f'{gain_label[j]}')
             plt.xlabel('Median Signal (ADU)')
             plt.ylabel('Variance (ADU^2)')
             
@@ -269,13 +288,9 @@ def standard_analysis_products(dirname):
             pdf.savefig()
             plt.close()
             
-            # Lin is Exp time vs Med Signal
-            # PTC is Med Signal vs Variance
-            
-        
         # TODO: something for guiding rows
-        # TODO: flat report pages
-        # TODO: labels for mean dark plots
+        # TODO: line fitting for linearity/PTC plots
+        # TODO: bad pixel maps
 
 def hist_page(pdf, data, title, summary_text):
     '''
@@ -284,7 +299,7 @@ def hist_page(pdf, data, title, summary_text):
     dmin, dmax = min(data.flatten()), max(data.flatten())
     data_range = int(np.ceil(dmax) - np.floor(dmin))
 
-    fig = plt.figure(figsize=[8.5,11],dpi=300)
+    fig = plt.figure(figsize=[8.5,11],dpi=250)
     plt.suptitle(title)
     
     data_hist, bin_edges = np.histogram(data,bins=100)
