@@ -379,9 +379,6 @@ if __name__ == '__main__':
     Usage:
     python cmost_camera.py EXPOSURESET CAMID DETID
     '''
-    print('Executing dwell test')
-    dwelltest('cmost','test')
-    exit()
 
     # Get command line parameters
     if len(sys.argv) < 3:
