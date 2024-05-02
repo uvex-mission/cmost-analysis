@@ -17,6 +17,16 @@ from datetime import datetime
 from pyarchon import cmost as cam
 from cmost_utils import get_temp
 
+
+def dwelltest(camid,detid):
+    basename = setup_camera(camid,detid)
+    start = time.time()
+    print('Taking test NUV guiding dwell')
+    exp_UVEX_NUV_dwell(basename+'_NUVguidingdark_test')
+    print('Total time elapsed: '+str(time.time() - start)+' s')
+    cam.close()
+
+
 def standard_analysis_exposures(camid,detid):
     '''
     Function to take all exposures required for standard analysis
@@ -71,36 +81,34 @@ def standard_analysis_exposures(camid,detid):
     cam.key('LONGEXPO=1// 1|0 means exposure in s|ms')
     
     # Standard operating mode darks, remain in dual-gain mode
-    # FUV mode - 900s + 9s
-    print('Taking FUV standard operating mode darks (2.5 hours)...')
-    for i in np.arange(10):
-        set_gain('low')
+    # FUV mode - 9 + 900s x 9
+    print('Taking FUV standard operating mode darks (2.3 hours)...')
+    for i in np.arange(9):
+        set_gain('hdr')
         cam.set_basename(basename+'_FUVdark'+str(i)+'_9')
         cam.key('EXPTIME=9//Exposure time in s')
         cam.expose(9,1,0)
-        set_gain('hdr')
         cam.set_basename(basename+'_FUVdark'+str(i)+'_900')
         cam.key('EXPTIME=900//Exposure time in s')
         cam.expose(900,1,0)
-    print('Time elapsed: '+str(time.time() - start)+' s')
+        print('Time elapsed: '+str(time.time() - start)+' s')
     
     # Get temperature again since some time has passed
     temptime, temp = get_temp(cmost=c)
     cam.key('TEMP='+str(temp)+'//ZIF Socket temperature in Kelvin')
     print('Socket temperature: '+str(temp)+' K')
         
-    # NUV mode - 300s + 3s
-    print('Taking NUV standard operating mode darks (1 hour)...')
-    for i in np.arange(10):
-        set_gain('low')
+    # NUV mode - 3 + 300s x 9
+    print('Taking NUV standard operating mode darks (45 mins)...')
+    for i in np.arange(9):
+        set_gain('hdr')
         cam.set_basename(basename+'_NUVdark'+str(i)+'_3')
         cam.key('EXPTIME=3//Exposure time in s')
         cam.expose(3,1,0)
-        set_gain('hdr')
         cam.set_basename(basename+'_NUVdark'+str(i)+'_300')
         cam.key('EXPTIME=300//Exposure time in s')
         cam.expose(300,1,0)
-    print('Time elapsed: '+str(time.time() - start)+' s')
+        print('Time elapsed: '+str(time.time() - start)+' s')
 
     # Get temperature again
     temptime, temp = get_temp(cmost=c)
@@ -109,14 +117,16 @@ def standard_analysis_exposures(camid,detid):
     
     # NUV mode - 300s + 3s, with one 1 Hz guide window
     # 1 Hz -> guide period = 1000 ms
-    # Default 10-row band of interest at given location
-    print('Taking NUV standard operating mode darks with 1 Hz guiding (1 hour)...')
-    for i in np.arange(10):
-        gbasename = basename+'_NUVdarkguiding'+str(i)+'_3'
-        take_guiding_exposure(3,'low',gbasename,boi_start=200,boi_size=10)
-        gbasename = basename+'_NUVdarkguiding'+str(i)+'_300'
-        take_guiding_exposure(300,'hdr',gbasename,boi_start=200,boi_size=10)
-    print('Time elapsed: '+str(time.time() - start)+' s')
+    # Default 10-row band of interest at default location (row 200)
+    print('Taking NUV standard operating mode darks with 1 Hz guiding (45 mins)...')
+    for i in np.arange(3):
+        # Each dwell is 3 cycles of 3+300s
+        exp_UVEX_NUV_dwell(basename+'_NUVguidingdark'+str(i))
+        #gbasename = basename+'_NUVguidingdark'+str(i)+'_3'
+        #take_guiding_exposure(3,'hdr',gbasename,boi_start=200,boi_size=10)
+        #gbasename = basename+'_NUVguidingdark'+str(i)+'_300'
+        #take_guiding_exposure(300,'hdr',gbasename,boi_start=200,boi_size=10)
+        print('Time elapsed: '+str(time.time() - start)+' s')
     
     # Get temperature again
     temptime, temp = get_temp(cmost=c)
@@ -138,14 +148,17 @@ def standard_analysis_exposures(camid,detid):
     print('Time elapsed: '+str(time.time() - start)+' s')
     
     cam.key('LED=1.7//LED voltage in Volts')
-    print('Taking illuminated flat field exposures (1 hour)...')
+    print('Taking illuminated flat field exposures (~4 hours)...')
     for g in ['high','low','hdr']:
+        print('Flats for '+g+' gain')
         set_gain(g)
-        # Loop through exposure times between 1 and ~500s
-        for t in np.rint(np.logspace(0,2.7,10)):
+        # Loop through exposure times between 1 and ~1260s
+        # Two exposures per exposure time for PTC generation
+        for t in np.rint(np.logspace(0,3.1,10)):
             cam.set_basename(basename+'_flat_'+g)
             cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
-            cam.expose(int(t),1,0)
+            cam.expose(int(t),2,0)
+        print('Time elapsed: '+str(time.time() - start)+' s')
 
     # Switch off LED and camera
     print('Exposures complete, shutting down camera')
@@ -307,50 +320,6 @@ def take_guiding_exposure(t,gain,basename,boi_start=200,boi_size=10):
     cam.key('EXPTIME='+str(t*1000)+'//Exposure time in milliseconds')
     cam.expose(0,1,0) # Zero-length exposure since it's been exposing throughout the guiding
 
-
-if __name__ == '__main__':
-    '''
-    Usage:
-    python cmost_camera.py EXPOSURESET CAMID DETID
-    '''
-
-    # Get command line parameters
-    if len(sys.argv) < 3:
-        print('''
-Usage:
-    python cmost_camera.py standard CAMID DETID
-    python cmost_camera.py longdark CAMID DETID GAIN
-            ''')
-        exit()
-
-    # Pick the exposure set to execute
-    if sys.argv[1] == 'standard':
-        print('Taking standard exposure set (~5.5 hours)')
-        if len(sys.argv) < 3: camid = raw_input('Camera ID (cmost or cmostjpl): ')
-        else: camid = sys.argv[2]
-        if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
-        else: detid = sys.argv[3]
-        standard_analysis_exposures(camid,detid)
-    elif sys.argv[1] == 'longdark':
-        print('Taking long darks (~9 hours)')
-        if len(sys.argv) < 3: camid = raw_input('Camera ID (cmost or cmostjpl): ')
-        else: camid = sys.argv[2]
-        if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
-        else: detid = sys.argv[3]
-        if len(sys.argv) < 5: detid = raw_input('Gain (high, low, or hdr): ')
-        else: gain = sys.argv[4]
-        long_darks(camid,detid,gain)
-    else:
-        print('Unknown exposure set. Options: standard, longdark')
-        exit()
-    
-
-    # Ultralong darks (12 hr, one gain mode at a time)
-    # Temperature-dependent darks?
-    # PPL 'standard' set?
-    # Other notes:
-    # use "KEY=." (i.e. set equal to a period) to remove the keyword "KEY"
-
 '''
 Description:    Function to take a full 900s(+9s) dwell sequnece for NUV with guiding.
                 Simply three NUV exposures in a row. HDR frame for short exposure.
@@ -372,6 +341,8 @@ def exp_UVEX_NUV_dwell(basename):
     cam.set_param('InitFrame',1) # End of dwell sequence; enable InitFrame
 
 def exp_UVEX_NUV_HDR(basename,first_exp): # NUX Exposure with guiding
+    print('Beginning NUV guiding HDR cycle')
+    nuvtime = time.time()
     # Starts with 3s of guiding followed by a low gain readout followed by 300s of guiding followed by and HDR readout
     cam.__send_command('longexposure','false')
     cam.set_param('longexposure',0)
@@ -381,21 +352,65 @@ def exp_UVEX_NUV_HDR(basename,first_exp): # NUX Exposure with guiding
     cam.set_param('BOI_start',200) # First row of the Band Of Interest
     if first_exp:
         cam.set_param('InitFrame',1) # will apply initial reset frame but doesn't not capture the resulting image
+    print('NUV short exp setup done, time elapsed: '+str(time.time() - nuvtime)+' s') # Should be negligible
     cam.set_basename(basename+'_UVEXNUV_1_3sguiding_')
     cam.expose(1000,3,0) # 3 Guiding Frames at 1 Hz
+    print('3 guiding frames taken, time elapsed: '+str(time.time() - nuvtime)+' s')
     if first_exp:
         cam.set_param('InitFrame',0) # we do not want a reset frame before readout here.
     set_gain('hdr') # Mode to Full Frame HDR Rolling Reset
     cam.set_basename(basename+'_UVEXNUV_2_hdr_short_')
     cam.expose(0,1,0) # Low Gain Frame
+    print('Short frame readout done, time elapsed: '+str(time.time() - nuvtime)+' s')
     set_gain('high')
     cam.set_mode('GUIDING') #
     cam.set_basename(basename+'_UVEXNUV_3_300sguiding_')
     cam.expose(1000,300,0) # 300 Guiding Frames
+    print('300 guiding frames taken, time elapsed: '+str(time.time() - nuvtime)+' s')
     set_gain('hdr') # Mode to Full Frame HDR Rolling Reset
     cam.set_basename(basename+'_UVEXNUV_4_hdr_')
     cam.expose(0,1,0)
+    print('Long frame readout done, total time elapsed: '+str(time.time() - nuvtime)+' s')
     # cam.set_param('InitFrame',1) # InitFrame will be handled in dwell sequence
+    
+
+if __name__ == '__main__':
+    '''
+    Usage:
+    python cmost_camera.py EXPOSURESET CAMID DETID
+    '''
+
+    # Get command line parameters
+    if len(sys.argv) < 3:
+        print('''
+Usage:
+    python cmost_camera.py standard CAMID DETID
+    python cmost_camera.py longdark CAMID DETID GAIN
+            ''')
+        exit()
+
+    # Pick the exposure set to execute
+    if sys.argv[1] == 'standard':
+        print('Taking standard exposure set (~8 hours)')
+        if len(sys.argv) < 3: camid = raw_input('Camera ID (cmost or cmostjpl): ')
+        else: camid = sys.argv[2]
+        if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
+        else: detid = sys.argv[3]
+        standard_analysis_exposures(camid,detid)
+    elif sys.argv[1] == 'longdark':
+        print('Taking long darks (~9 hours)')
+        if len(sys.argv) < 3: camid = raw_input('Camera ID (cmost or cmostjpl): ')
+        else: camid = sys.argv[2]
+        if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
+        else: detid = sys.argv[3]
+        if len(sys.argv) < 5: detid = raw_input('Gain (high, low, or hdr): ')
+        else: gain = sys.argv[4]
+        long_darks(camid,detid,gain)
+    else:
+        print('Unknown exposure set. Options: standard, longdark')
+        exit()
+
+
 
 ''' Old test functions:
 
