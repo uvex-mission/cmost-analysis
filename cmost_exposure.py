@@ -25,6 +25,10 @@ class Exposure():
         Defaults to True
         If True, delete raw frames after CDS to save on memory
         
+    graycode : bool
+        Defaults to False
+        If True, applies gray code descrambling to the cds frames
+        
     Methods
     -------
     read_fits
@@ -36,6 +40,8 @@ class Exposure():
     get_info
     
     cleanup_frames
+    
+    descramble_gray_code
     
     Attributes
     ----------
@@ -91,18 +97,18 @@ class Exposure():
         A Numpy array of 2-d frames, containing CDS frames that have been binned up by a factor supplied
         by the user (default 4)
     '''
-    def __init__(self, filepath='', custom_keys=[], cleanup=True):
+    def __init__(self, filepath='', custom_keys=[], cleanup=True, graycode=False):
         self.filepath = filepath
     
         if self.filepath != '':
             # Read image at provided filepath
-            self.read_fits(self.filepath, custom_keys)
+            self.read_fits(self.filepath, custom_keys, graycode)
         
         # Once everything is loaded delete what's no longer needed
         if cleanup:
             self.cleanup_frames()
 
-    def read_fits(self, filepath, custom_keys):
+    def read_fits(self, filepath, custom_keys, graycode):
         '''
         Read FITS image and populate attributes
         
@@ -174,6 +180,10 @@ class Exposure():
 
         # Perform CDS on the frames
         self.perform_cds()
+        
+        # Perform gray code descrambling
+        if graycode:
+            self.descramble_gray_code()
 
         cmost_file.close()
 
@@ -221,6 +231,34 @@ class Exposure():
             # Just return the raw image
             self.cds_frames = self.raw_frames
             self.dev_size = (self.cds_frames.shape[2], self.cds_frames.shape[1]) # Width, height
+    
+    def descramble_gray_code(self):
+        '''
+        Perform gray code descrambling on CDS frames
+        '''
+        def binary_to_gray(n):
+            n = int(n)
+            n ^= (n>>1)
+            return n
+        
+        col_width = 256
+        orig_shape = self.cds_frames.shape
+        
+        binarycode = range(col_width)
+        graycode = np.array([binary_to_gray(i) for i in binarycode])
+        t = np.argsort(graycode, axis=-1, kind=None, order=None)
+        
+        # Sort CDS frames into correct order
+        if len(orig_shape) == 3: # Single-gain mode frame
+            AmpNb = orig_shape[2]//col_width # Number of amplifiers
+            image = np.reshape(self.cds_frames,(orig_shape[0],orig_shape[1],col_width,AmpNb), order='F')
+            image = image[:,:,t,:]
+            self.cds_frames = image.reshape(orig_shape, order='F')
+        elif len(orig_shape) == 4: # Dual-gain mode frame
+            AmpNb = orig_shape[3]//col_width
+            image = np.reshape(self.cds_frames,(orig_shape[0],orig_shape[1],orig_shape[2],col_width,AmpNb), order='F')
+            image = image[:,:,:,t,:]
+            self.cds_frames = image.reshape(orig_shape, order='F')
 
     def bin_frames(self, bin_size=4):
         '''
