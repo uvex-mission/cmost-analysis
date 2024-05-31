@@ -22,11 +22,12 @@ from cmost_exposure import Exposure, load_by_file_prefix
 font = {'size' : 12, 'family' : 'sans-serif'}
 matplotlib.rc('font', **font)
 
-def standard_analysis_products(dirname):
+def standard_analysis_products(dirname, **kwargs):
     '''
     Load standard exposures from the given directory and output
     standard analysis reports
     '''
+    
     # Load file list
     files = os.listdir(dirname)
     if len(files) < 1:
@@ -43,6 +44,7 @@ def standard_analysis_products(dirname):
     exp = Exposure(os.path.join(dirname,files[0]))
     
     # Scan through files to find out what's available
+    bias_present, dark_present, flat_present = 0, 0, 0
     for f in files:
         if 'bias' in f: bias_present = 1
         if 'dark' in f: dark_present = 1
@@ -73,7 +75,7 @@ def standard_analysis_products(dirname):
         # We expect one bias frame per gain mode: high, low, HDR
         #bias_present = 0
         if bias_present:
-            bias_frames = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias')
+            bias_frames = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias', **kwargs)
             for bifr in bias_frames:
                 # For each gain mode, print a page of plots
                 if bifr.gain == 'hdr':
@@ -120,8 +122,8 @@ def standard_analysis_products(dirname):
                     for i in range(n_dwell):
                         for j in range(n_exp):
                             # Load long and short full frames
-                            long_frame = load_by_file_prefix(f'{dirname}/{camera}_{detid}_{mode}{i}_FullDwell_exp{j}_UVEXNUV_4')[0]
-                            short_frame = load_by_file_prefix(f'{dirname}/{camera}_{detid}_{mode}{i}_FullDwell_exp{j}_UVEXNUV_2')[0]
+                            long_frame = load_by_file_prefix(f'{dirname}/{camera}_{detid}_{mode}{i}_FullDwell_exp{j}_UVEXNUV_4', **kwargs)[0]
+                            short_frame = load_by_file_prefix(f'{dirname}/{camera}_{detid}_{mode}{i}_FullDwell_exp{j}_UVEXNUV_2', **kwargs)[0]
                             
                             long_high.append(long_frame.cds_frames[0,0])
                             long_low.append(long_frame.cds_frames[0,1])
@@ -135,8 +137,8 @@ def standard_analysis_products(dirname):
                 else:
                     n_frame = 9
                     for i in range(n_frame):
-                        long_frame = load_by_file_prefix(f'{dirname}/{camera}_{detid}_{mode}{i}_{long}_')[0]
-                        short_frame = load_by_file_prefix(f'{dirname}/{camera}_{detid}_{mode}{i}_{short}_')[0]
+                        long_frame = load_by_file_prefix(f'{dirname}/{camera}_{detid}_{mode}{i}_{long}_', **kwargs)[0]
+                        short_frame = load_by_file_prefix(f'{dirname}/{camera}_{detid}_{mode}{i}_{short}_', **kwargs)[0]
                             
                         long_high.append(long_frame.cds_frames[0,0])
                         long_low.append(long_frame.cds_frames[0,1])
@@ -222,22 +224,31 @@ def standard_analysis_products(dirname):
                 plt.close()
     
         if flat_present:
-            gain_label, sat_flats = [], []
+            gain_label, sat_flats, mid_flats, mid_flat_times = [], [], [], []
             exp_times, med_sig, var = [], [], []
             for gain in ['hdr','high','low']:
-                flat_frames = load_by_file_prefix(f'{dirname}/{camera}_{detid}_flat_{gain}')
+                flat_frames = load_by_file_prefix(f'{dirname}/{camera}_{detid}_flat_{gain}', **kwargs)
                 exp = np.array([ff.exp_time for ff in flat_frames])
                 max_exp, max_i = max(exp), np.argmax(exp)
-                
+
                 if gain == 'hdr':
                     gain_label.extend(['high (dual-gain)', 'low (dual-gain)'])
                     sat_flats.extend((flat_frames[max_i].cds_frames[0,0], flat_frames[max_i].cds_frames[0,1]))
+                    
                     medians = np.array([ff.get_median((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames])
                     variance = np.array([ff.get_variance((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames])
                     
                     exp_times.extend((exp,exp))
                     med_sig.extend((medians[:,0],medians[:,1]))
                     var.extend((variance[:,0],variance[:,1]))
+                    
+                    # Find the mid-range exposures
+                    hmid_exp_i = np.where( (medians[:,0] > 5000) & (medians[:,0] < 15000) )[0][0]
+                    lmid_exp_i = np.where( (medians[:,1] > 5000) & (medians[:,1] < 15000) )[0][0]
+                    
+                    mid_flat_times.extend([exp[hmid_exp_i], exp[lmid_exp_i]])
+                    mid_flats.extend((flat_frames[hmid_exp_i].cds_frames[0,0], flat_frames[lmid_exp_i].cds_frames[0,1]))
+                    
                 else:
                     gain_label.append(gain)
                     sat_flats.append(flat_frames[max_i].cds_frames[0])
@@ -247,6 +258,22 @@ def standard_analysis_products(dirname):
                     exp_times.append(exp)
                     med_sig.append(medians)
                     var.append(variance)
+                    
+                    # Find the mid-range exposures
+                    mid_exp_i = np.where( (medians > 5000) & (medians < 15000) )[0][0]
+                    mid_flats.append(flat_frames[mid_exp_i].cds_frames[0])
+                    mid_flat_times.append(exp[mid_exp_i])
+                    
+            # Mid-range flats
+            for i, flat in enumerate(mid_flats):
+                mmin, mmax = min(flat.flatten()), max(flat.flatten())
+                
+                summary_text = f'Gain mode: {gain_label[i]}\n'
+                summary_text += f'Illuminated {mid_flat_times[i]}s exposure\n'
+                summary_text += f'Min median pixel value: {mmin} ADU; max median pixel value: {mmax} ADU\n'
+                
+                # Create a standard histogram page and save it to the pdf
+                hist_page(pdf, flat, f'Mid-range flat frame - gain: {gain_label[i]}', summary_text)
 
             # Well depth report
             for i, flat in enumerate(sat_flats):
@@ -260,7 +287,7 @@ def standard_analysis_products(dirname):
                 summary_text += f'Pixels < 5000 ADU: {n_bad}, {bad_percent:.3f}%\n'
                 
                 # Create a standard histogram page and save it to the pdf
-                hist_page(pdf, flat, f'Saturated flat frame - gain: {gain_label[i]}', summary_text)
+                hist_page(pdf, flat, f'Well depth (saturated flat frame) - gain: {gain_label[i]}', summary_text)
                     
             # Linearity and PTC plots
             fig = plt.figure(figsize=[8.5,11],dpi=300)
@@ -272,17 +299,19 @@ def standard_analysis_products(dirname):
             # Linearity curve
             plt.sca(ax1)
             plt.title(f'Linearity')
-            for j in range(4): plt.scatter(exp_times[j],med_sig[j],label=f'{gain_label[j]}')
+            for j in range(4): plt.scatter(exp_times[j],med_sig[j],label=f'{gain_label[j]}',marker='x')
             plt.xlabel('Exposure Time (s)')
             plt.ylabel('Median Signal (ADU)')
+            plt.loglog()
             plt.legend(fontsize=10,ncol=4,loc=8,bbox_to_anchor=(0.5, -0.2))
                 
-            # PTC (TBA)
+            # PTC
             plt.sca(ax2)
             plt.title(f'Photon Transfer Curve')
-            for j in range(4): plt.scatter(med_sig[j],var[j],label=f'{gain_label[j]}')
+            for j in range(4): plt.scatter(med_sig[j],var[j],label=f'{gain_label[j]}',marker='x')
             plt.xlabel('Median Signal (ADU)')
             plt.ylabel('Variance (ADU^2)')
+            plt.loglog()
             
             plt.tight_layout()
             pdf.savefig()
@@ -311,7 +340,7 @@ def hist_page(pdf, data, title, summary_text):
     ax3 = plt.subplot2grid((5,2), (2,1), rowspan=2)
                     
     plt.sca(ax1)
-    plt.imshow(data, vmin=0, vmax=max(50,np.percentile(data,99)))
+    plt.imshow(data, vmin=0, vmax=np.percentile(data,99.9))
     plt.colorbar(label='ADU', shrink=0.9)
     
     plt.sca(ax2)
@@ -337,12 +366,19 @@ def hist_page(pdf, data, title, summary_text):
 if __name__ == '__main__':
     '''
     Usage:
-    python cmost_analysis.py DIRECTORY
+    python [-g] cmost_analysis.py DIRECTORY
     '''
-    if len(sys.argv) < 2:
+    opts = [opt for opt in sys.argv[1:] if opt.startswith("-")]
+    args = [arg for arg in sys.argv[1:] if not arg.startswith("-")]
+    
+    if len(args) < 1:
         dirname = input('Analysis directory: ')
     else:
-        dirname = sys.argv[1]
-        
-    standard_analysis_products(dirname)
+        dirname = args[0]
+    
+    kwargs = {}
+    if '-g' in opts:
+        kwargs['graycode'] = True
+
+    standard_analysis_products(dirname,**kwargs)
 
