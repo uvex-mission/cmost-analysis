@@ -27,7 +27,6 @@ def standard_analysis_products(dirname, **kwargs):
     Load standard exposures from the given directory and output
     standard analysis reports
     '''
-    
     # Load file list
     files = os.listdir(dirname)
     if len(files) < 1:
