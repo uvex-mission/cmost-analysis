@@ -142,20 +142,23 @@ def standard_analysis_exposures(camid,detid):
     
     # Linearity/PTC illuminated flat field exposures of increasing exposure time
     # Switch on LED
-    cam.setled(1.7) #Voltage TBD
+    cam.setled(1.69) #Voltage TBD
     print('Waiting for LED to settle...')
     time.sleep(300) # Wait for LED to settle, 5 min
     print('Time elapsed: '+str(time.time() - start)+' s')
     
-    cam.key('LED=1.7//LED voltage in Volts')
-    print('Taking illuminated flat field exposures (~4 hours)...')
+    cam.key('LED=1.69//LED voltage in Volts')
+    print('Taking illuminated flat field exposures (~6 hours)...')
     for g in ['high','low','hdr']:
         print('Flats for '+g+' gain')
         set_gain(g)
-        # Loop through exposure times between 1 and ~1260s
+        # Min-length exposures
+        cam.set_basename(basename+'_flat_'+g)
+        cam.key('EXPTIME=0//exposure time in seconds')
+        cam.expose(0,2,0)
+        # Loop through exposure times between 1 and ~1995s
         # Two exposures per exposure time for PTC generation
-        for t in np.rint(np.logspace(0,3.1,10)):
-            cam.set_basename(basename+'_flat_'+g)
+        for t in np.rint(np.logspace(0,3.3,10)):
             cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
             cam.expose(int(t),2,0)
         print('Time elapsed: '+str(time.time() - start)+' s')
