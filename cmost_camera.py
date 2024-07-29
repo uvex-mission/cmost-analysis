@@ -16,7 +16,7 @@ import time
 from datetime import datetime
 from pyarchon import cmost as cam
 from cmost_utils import get_temp
-
+import subprocess
 
 def dwelltest(camid,detid):
     basename = setup_camera(camid,detid)
@@ -35,18 +35,12 @@ def standard_analysis_exposures(camid,detid):
     '''
     start = time.time()
     
-    # TODO: Initialize Lakeshore in here to take temperatures
-    '''
-    try:
-        import telnetlib
-        host = "coots1.caltech.edu"
-        port = 10001
-        timeout = 100
-        #session = telnetlib.Telnet(host,port,timeout)
-        #session.write(b"SETP 1,140")
-    except:
-        print('Could not connect to Lakeshore controller, no temperature information available')
-    '''
+    # Dump .acf and notes file into the output directory
+    # TODO: find a way to query camerad for config file rather than hardcoding it
+    config_filepath = '/home/user/CMOST/cmost1k1k.cfg'
+    notes_filepath = dump_info(config_filepath)
+
+    # Start up the camera
     basename = setup_camera(camid,detid)
     
     # Get device temperature (currently not being recorded)
@@ -57,34 +51,66 @@ def standard_analysis_exposures(camid,detid):
     cam.key('TEMP='+str(temp)+'//ZIF Socket temperature in Kelvin')
     print('Socket temperature: '+str(temp)+' K')
     
-    # Wait 10 mins for biases to settle
-    print('Waiting for biases to settle (10 mins)...')
-    time.sleep(600)
-    print('Time elapsed: '+str(time.time() - start)+' s')
-    
-    # Take analysis exposures
-
-    # Minimum-length dark frames - 20 frames for each gain mode
-    print('Taking bias frames (~1 min)...')
-    cam.key('EXPTIME=0//Exposure time in ms')
-    cam.set_param('InitFrame',1) # Apply initial reset frame but don't capture resulting image
-    cam.key('NORESET=1//Reset frame has been removed')
-    for g in ['high','low','hdr']:
-        cam.set_basename(basename+'_bias_'+g)
-        set_gain(g)
-        cam.expose(0,20,0)
-    print('Time elapsed: '+str(time.time() - start)+' s')
-    
     # Switch to longexposure mode
     cam.__send_command('longexposure','true')
     cam.set_param('longexposure',1)
     cam.key('LONGEXPO=1// 1|0 means exposure in s|ms')
     
+    # Wait 25 mins for biases to settle after turning on camera
+    print('Waiting for biases to settle (25 mins)...')
+    time.sleep(1500)
+    print('Time elapsed: '+str(time.time() - start)+' s')
+    
+    # Take analysis exposures
+    
+    # Single minimum-length frame in each gain mode to get readout timing
+    print('Getting readout times (<1 min)...')
+    cam.key('EXPTIME=0//Exposure time in ms')
+    cam.set_param('InitFrame',1) # Apply initial reset frame but don't capture resulting image
+    cam.key('NORESET=1//Reset frame has been removed')
+    time_notes = 'Readout times:\n'
+    for g in ['high','low','hdr']:
+        cam.set_basename(basename+'_singleframe_'+g)
+        set_gain(g)
+        exp_start = time.time()
+        cam.expose(0,1,0)
+        readout_time = time.time() - exp_start
+        time_notes = gain+': '+str(readout_time)+'\n'
+    # Output time notes into the notes file
+    notes_file = open(notes_filepath,'a')
+    notes_file.write(time_notes)
+    notes_file.close()
+    print('Time elapsed: '+str(time.time() - start)+' s')
+
+    # Minimum-length dark frames - 100 frames for each gain mode
+    print('Taking bias frames (~5 min)...')
+    for g in ['high','low','hdr']:
+        cam.set_basename(basename+'_bias_'+g)
+        set_gain(g)
+        cam.expose(0,100,0)
+    print('Time elapsed: '+str(time.time() - start)+' s')
+    
+    # Take 3 x 3 hr darks in HDR mode only
+    print('Taking long darks (9 hours)...')
+    g = set_gain('hdr')
+    for i in range(3):
+        ind = str(i)
+        print('Taking '+gain+' 3-hour dark... ('+str(i+1)+' of 3)')
+        cam.set_basename(basename+'_longdark'+ind+'_hdr')
+        cam.key('EXPTIME=10800//Exposure time in seconds')
+        cam.expose(10800,1,0)
+        print('Time elapsed: '+str(time.time() - start)+' s')
+    # Also take a 10-minute dark for subtraction
+    cam.set_basename(basename+'_longdark'+ind+'_shorthdr')
+    cam.key('EXPTIME=600//Exposure time in seconds')
+    cam.expose(600,1,0)
+    print('Time elapsed: '+str(time.time() - start)+' s')
+    
     # Standard operating mode darks, remain in dual-gain mode
     # FUV mode - 9 + 900s x 9
     print('Taking FUV standard operating mode darks (2.3 hours)...')
+    set_gain('hdr')
     for i in np.arange(9):
-        set_gain('hdr')
         cam.set_basename(basename+'_FUVdark'+str(i)+'_9')
         cam.key('EXPTIME=9//Exposure time in s')
         cam.expose(9,1,0)
@@ -100,8 +126,8 @@ def standard_analysis_exposures(camid,detid):
         
     # NUV mode - 3 + 300s x 9
     print('Taking NUV standard operating mode darks (45 mins)...')
+    set_gain('hdr')
     for i in np.arange(9):
-        set_gain('hdr')
         cam.set_basename(basename+'_NUVdark'+str(i)+'_3')
         cam.key('EXPTIME=3//Exposure time in s')
         cam.expose(3,1,0)
@@ -141,32 +167,56 @@ def standard_analysis_exposures(camid,detid):
     cam.key('NORESET=1//Reset frame has been removed')
     
     # Linearity/PTC illuminated flat field exposures of increasing exposure time
+    print('Taking flat-matched darks (~3 hours)...')
+    for g in ['high','low','hdr']:
+        set_gain(g)
+        # Min-length exposure
+        cam.set_basename(basename+'_flatdark_'+g)
+        cam.key('EXPTIME=0//exposure time in seconds')
+        cam.expose(0,3,0)
+        # Loop through exposure times between 3 and ~630s
+        # Three exposures per exposure time to get a median to filter out cosmic rays
+        for t in np.rint(np.logspace(0.5,2.8,7)):
+            cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
+            cam.expose(int(t),3,0)
+        print('Time elapsed: '+str(time.time() - start)+' s')
+    
     # Switch on LED
-    cam.setled(1.69) #Voltage TBD
+    cam.setled(1.64) #Voltage TBD
     print('Waiting for LED to settle...')
     time.sleep(300) # Wait for LED to settle, 5 min
     print('Time elapsed: '+str(time.time() - start)+' s')
     
-    cam.key('LED=1.69//LED voltage in Volts')
     print('Taking illuminated flat field exposures (~6 hours)...')
-    for g in ['high','low','hdr']:
-        print('Flats for '+g+' gain')
-        set_gain(g)
-        # Min-length exposures
-        cam.set_basename(basename+'_flat_'+g)
-        cam.key('EXPTIME=0//exposure time in seconds')
-        cam.expose(0,2,0)
-        # Loop through exposure times between 1 and ~1995s
-        # Two exposures per exposure time for PTC generation
-        for t in np.rint(np.logspace(0,3.3,10)):
-            cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
-            cam.expose(int(t),2,0)
-        print('Time elapsed: '+str(time.time() - start)+' s')
+    for led in np.arange(1.64,1.76,0.04):
+        cam.setled(led)
+        cam.key('LED='+str(led)+'// LED voltage in Volts')
+        time.sleep(60)
+        
+        for g in ['high','low','hdr']:
+            # Skip non-useful gain/voltage combinations to save time
+            if (g == 'high') & (led == 1.76): continue
+            if (g == 'low') & (led == 1.64): continue
+        
+            print('Flats for '+g+' gain')
+            set_gain(g)
+            # Min-length exposures
+            cam.set_basename(basename+'_flat_'+g)
+            cam.key('EXPTIME=0//exposure time in seconds')
+            cam.expose(0,2,0)
+            # Loop through exposure times between 3 and ~630s
+            # Two exposures per exposure time for PTC generation
+            for t in np.rint(np.logspace(0.5,2.8,7)):
+                if (g == 'high') & (t > 1000): continue # Save some time by skipping excess saturated frames
+                cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
+                cam.expose(int(t),2,0)
+            print('Time elapsed: '+str(time.time() - start)+' s')
 
     # Switch off LED and camera
     print('Exposures complete, shutting down camera')
     cam.setled(0)
     cam.close()
+    
     print('Total time elapsed: '+str(time.time() - start)+' s')
 
     
@@ -278,6 +328,41 @@ def set_gain(gain):
     
     cam.key('GAIN='+gain)
     return True
+
+def dump_info(config_filepath):
+    '''
+    Take information from config file and dump acf and notes file into output directory
+    
+    Parameters
+    ----------
+    config_filepath : string
+        Path to config file being used with the camera server
+    '''
+    cfg_file = open(config_filepath)
+    
+    for line in cfg_file.readlines():
+        if line.startswith("DEFAULT_FIRMWARE"):
+            acf_file = line.split('=')[1][:-1]
+        if line.startswith("IMDIR"):
+            output_dir = line.split('=')[1][:-1]+time.strftime('%Y%m%d')
+            
+    # Check for output directory
+    if not os.path.isdir(output_dir):
+        os.mkdir(output_dir)
+    
+    # Dump acf file into output directory
+    shutil.copy2(acf_file,output_dir)
+    
+    # Create a notes file in output directory
+    notes = 'Exposure set taken: '+time.strftime('%Y-%m-%d %H:%M:%S')+'\n\n'
+    notes += 'Notes:\n\n'
+    
+    notes_filepath = output_dir+'/analysis_notes.txt'
+    notes_file = open(notes_filepath,'w')
+    notes_file.write(notes)
+    notes_file.close()
+    
+    return notes_filepath
     
     
 def take_guiding_exposure(t,gain,basename,boi_start=200,boi_size=10):
@@ -394,7 +479,7 @@ Usage:
 
     # Pick the exposure set to execute
     if sys.argv[1] == 'standard':
-        print('Taking standard exposure set (~8 hours)')
+        print('Taking standard exposure set (~23 hours)')
         if len(sys.argv) < 3: camid = raw_input('Camera ID (cmost or cmostjpl): ')
         else: camid = sys.argv[2]
         if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
@@ -486,4 +571,15 @@ def test_PTC(camid,detid):
     cam.setled(0)
     cam.close()
     print('Total time elapsed: '+str(time.time() - start)+' s')
+    
+    # Lakeshore connection code for future reference
+    try:
+        import telnetlib
+        host = "coots1.caltech.edu"
+        port = 10001
+        timeout = 100
+        #session = telnetlib.Telnet(host,port,timeout)
+        #session.write(b"SETP 1,140")
+    except:
+        print('Could not connect to Lakeshore controller, no temperature information available')
 '''
