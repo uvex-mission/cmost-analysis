@@ -9,7 +9,7 @@
     python cmost_camera.py EXPOSURESET CAMID DETID
 '''
 from __future__ import print_function
-import os, sys
+import os, sys, shutil
 sys.path.append('..')
 import numpy as np
 import time
@@ -75,7 +75,7 @@ def standard_analysis_exposures(camid,detid):
         exp_start = time.time()
         cam.expose(0,1,0)
         readout_time = time.time() - exp_start
-        time_notes = gain+': '+str(readout_time)+'\n'
+        time_notes += g+': '+str(readout_time)+'\n'
     # Output time notes into the notes file
     notes_file = open(notes_filepath,'a')
     notes_file.write(time_notes)
@@ -92,10 +92,10 @@ def standard_analysis_exposures(camid,detid):
     
     # Take 3 x 3 hr darks in HDR mode only
     print('Taking long darks (9 hours)...')
-    g = set_gain('hdr')
+    set_gain('hdr')
     for i in range(3):
         ind = str(i)
-        print('Taking '+gain+' 3-hour dark... ('+str(i+1)+' of 3)')
+        print('Taking hdr 3-hour dark... ('+str(i+1)+' of 3)')
         cam.set_basename(basename+'_longdark'+ind+'_hdr')
         cam.key('EXPTIME=10800//Exposure time in seconds')
         cam.expose(10800,1,0)
@@ -111,9 +111,12 @@ def standard_analysis_exposures(camid,detid):
     print('Taking FUV standard operating mode darks (2.3 hours)...')
     set_gain('hdr')
     for i in np.arange(9):
+	cam.set_param('InitFrame',1) # Apply initial reset frame but don't capture resulting image #Added by Tim
         cam.set_basename(basename+'_FUVdark'+str(i)+'_9')
         cam.key('EXPTIME=9//Exposure time in s')
         cam.expose(9,1,0)
+	
+        cam.set_param('InitFrame',0) # Added by Tim
         cam.set_basename(basename+'_FUVdark'+str(i)+'_900')
         cam.key('EXPTIME=900//Exposure time in s')
         cam.expose(900,1,0)
@@ -127,11 +130,25 @@ def standard_analysis_exposures(camid,detid):
     # NUV mode - 3 + 300s x 9
     print('Taking NUV standard operating mode darks (45 mins)...')
     set_gain('hdr')
-    for i in np.arange(9):
-        cam.set_basename(basename+'_NUVdark'+str(i)+'_3')
+    for i in np.arange(3):
+	cam.set_param('InitFrame',1) # Added by Tim
+        cam.set_basename(basename+'_NUVdark'+str(i*3)+'_3')
         cam.key('EXPTIME=3//Exposure time in s')
         cam.expose(3,1,0)
-        cam.set_basename(basename+'_NUVdark'+str(i)+'_300')
+        cam.set_param('InitFrame',0) # Added by Tim
+        cam.set_basename(basename+'_NUVdark'+str(i*3)+'_300')
+        cam.key('EXPTIME=300//Exposure time in s')
+        cam.expose(300,1,0)
+	cam.set_basename(basename+'_NUVdark'+str(i*3 + 1)+'_3')
+        cam.key('EXPTIME=3//Exposure time in s')
+        cam.expose(3,1,0)
+        cam.set_basename(basename+'_NUVdark'+str(i*3 + 1)+'_300')
+        cam.key('EXPTIME=300//Exposure time in s')
+        cam.expose(300,1,0)
+        cam.set_basename(basename+'_NUVdark'+str(i*3 + 2)+'_3')
+        cam.key('EXPTIME=3//Exposure time in s') 
+        cam.expose(3,1,0)
+        cam.set_basename(basename+'_NUVdark'+str(i*3 + 2)+'_300')
         cam.key('EXPTIME=300//Exposure time in s')
         cam.expose(300,1,0)
         print('Time elapsed: '+str(time.time() - start)+' s')
@@ -166,21 +183,6 @@ def standard_analysis_exposures(camid,detid):
     cam.set_param('InitFrame',1) # Apply initial reset frame but don't capture resulting image
     cam.key('NORESET=1//Reset frame has been removed')
     
-    # Linearity/PTC illuminated flat field exposures of increasing exposure time
-    print('Taking flat-matched darks (~3 hours)...')
-    for g in ['high','low','hdr']:
-        set_gain(g)
-        # Min-length exposure
-        cam.set_basename(basename+'_flatdark_'+g)
-        cam.key('EXPTIME=0//exposure time in seconds')
-        cam.expose(0,3,0)
-        # Loop through exposure times between 3 and ~630s
-        # Three exposures per exposure time to get a median to filter out cosmic rays
-        for t in np.rint(np.logspace(0.5,2.8,7)):
-            cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
-            cam.expose(int(t),3,0)
-        print('Time elapsed: '+str(time.time() - start)+' s')
-    
     # Switch on LED
     cam.setled(1.64) #Voltage TBD
     print('Waiting for LED to settle...')
@@ -211,7 +213,7 @@ def standard_analysis_exposures(camid,detid):
                 cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
                 cam.expose(int(t),2,0)
             print('Time elapsed: '+str(time.time() - start)+' s')
-
+    
     # Switch off LED and camera
     print('Exposures complete, shutting down camera')
     cam.setled(0)
@@ -428,7 +430,7 @@ def exp_UVEX_NUV_dwell(basename):
         exp_UVEX_NUV_HDR(basename+"_FullDwell_exp"+str(i),first_exp)
     cam.set_param('InitFrame',1) # End of dwell sequence; enable InitFrame
 
-def exp_UVEX_NUV_HDR(basename,first_exp): # NUX Exposure with guiding
+def exp_UVEX_NUV_HDR(basename,first_exp): # NUV Exposure with guiding
     print('Beginning NUV guiding HDR cycle')
     nuvtime = time.time()
     # Starts with 3s of guiding followed by a low gain readout followed by 300s of guiding followed by and HDR readout
@@ -479,7 +481,7 @@ Usage:
 
     # Pick the exposure set to execute
     if sys.argv[1] == 'standard':
-        print('Taking standard exposure set (~23 hours)')
+        print('Taking standard exposure set (~20 hours)')
         if len(sys.argv) < 3: camid = raw_input('Camera ID (cmost or cmostjpl): ')
         else: camid = sys.argv[2]
         if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
