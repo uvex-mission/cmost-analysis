@@ -6,7 +6,7 @@
     intialize Python 2.7 by using 'conda activate py2' before running
     
     Usage:
-    python cmost_camera.py EXPOSURESET CAMID DETID
+    python cmost_camera.py EXPOSURESET CAMID DETID LED
     
     For a more tailored exposure set, call standard_analysis_exposures() from a script
 '''
@@ -29,7 +29,7 @@ def dwelltest(camid,detid):
     cam.close()
 
 
-def standard_analysis_exposures(camid, detid, singleframe=True, bias=True, longdark=True, opdark=True, flat=True):
+def standard_analysis_exposures(camid, detid, ledw='None', singleframe=True, bias=True, longdark=True, opdark=True, flat=True, singleflat=False, flatv=-1):
     '''
     Function to take all exposures required for standard analysis
     to be performed on all chips. By default takes all exposure sets,
@@ -44,7 +44,8 @@ def standard_analysis_exposures(camid, detid, singleframe=True, bias=True, longd
             measurement and glow characterization
     - opdark: 9 sets of exposures in FUV mode (9+900s), NUV mode (3+300s) and
             NUV guiding mode (3+300s with 10Hz guiding)
-    - flat: Sets of flat frames for PTC generation
+    - flat: Sets of flat frames for PTC generation (requires ledw to be set)
+    - singleflat: 20x flat frame in a particular configuration (requires ledw and flatv to be set)
     '''
     start = time.time()
     
@@ -206,42 +207,66 @@ def standard_analysis_exposures(camid, detid, singleframe=True, bias=True, longd
         cam.set_param('InitFrame',1) # Apply initial reset frame but don't capture resulting image
         cam.key('NORESET=1//Reset frame has been removed')
     
-    # Switch on LED
+    # Illuminated flat frame sequence for PTC
     if flat:
-        cam.setled(1.64) #Voltage TBD
-        print('Waiting for LED to settle...')
-        time.sleep(300) # Wait for LED to settle, 5 min
-        print('Time elapsed: '+str(time.time() - start)+' s')
-        
-        print('Taking illuminated flat field exposures (~6 hours)...')
-        for led in np.arange(1.64,1.76,0.04):
-            cam.setled(led)
-            cam.key('LED='+str(led)+'// LED voltage in Volts')
-            time.sleep(60)
+        if ledw == 'None':
+            print('No LED wavelength specified, skipping flats')
+        else:
+            # Get the ideal voltage range for this LED
+            cam.key('LEDWAVE='+str(ledw)+'// LED wavelength in nm')
+            voltages = get_ptc_setup(ledw)
             
-            for g in ['high','low','hdr']:
-                # Skip non-useful gain/voltage combinations to save time
-                if (g == 'high') & (led == 1.76): continue
-                if (g == 'low') & (led == 1.64): continue
+            if voltages is not None:
+                # Switch on LED
+                print('Taking illuminated flat field exposures (~3 hours)...')
+                for voltage in voltages:
+                    cam.setled(voltage)
+                    cam.key('LED='+str(voltage)+'// LED voltage in Volts')
+                    time.sleep(60)
+                    
+                    for g in ['high','low','hdr']:
+                        print('Flats for '+g+' gain')
+                        set_gain(g)
+                        # Min-length exposures
+                        cam.set_basename(basename+'_flat_'+g)
+                        cam.key('EXPTIME=0//exposure time in seconds')
+                        cam.expose(0,2,0)
+                        # Loop through exposure times between 1 and ~200s
+                        # Two exposures per exposure time for PTC generation
+                        for t in np.rint(np.logspace(0,2.3,10)):
+                            cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
+                            cam.expose(int(t),2,0)
+                        print('Time elapsed: '+str(time.time() - start)+' s')
+                    
+                    # Get temperature again
+                    temptime, temp = get_temp(cmost=c)
+                    cam.key('TEMP='+str(temp)+'//ZIF Socket temperature in Kelvin')
+                    print('Socket temperature: '+str(temp)+' K')
+            else:
+                print('No voltage set found for this LED, skipping flats')
             
-                print('Flats for '+g+' gain')
-                set_gain(g)
-                # Min-length exposures
-                cam.set_basename(basename+'_flat_'+g)
-                cam.key('EXPTIME=0//exposure time in seconds')
-                cam.expose(0,2,0)
-                # Loop through exposure times between 3 and ~630s
-                # Two exposures per exposure time for PTC generation
-                for t in np.rint(np.logspace(0.5,2.8,7)):
-                    if (g == 'high') & (t > 1000): continue # Save some time by skipping excess saturated frames
-                    cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
-                    cam.expose(int(t),2,0)
-                print('Time elapsed: '+str(time.time() - start)+' s')
+    # Set of illuminated flats with single setup
+    if singleflat:
+        if ledw == 'None':
+            print('No LED wavelength specified, skipping flats')
+        elif flatv < 0:
+            print('No LED voltage specified, skipping flats')
+        else:
+            cam.key('LEDWAVE='+str(ledw)+'// LED wavelength in nm')
+            gain = 'high'
+            t = 300
+            # Switch on LED
+            cam.setled(flatv)
+            cam.key('LED='+str(flatv)+'// LED voltage in Volts')
+            print('Waiting for LED to settle...')
+            time.sleep(60) # Wait for LED to settle, 1 min
+            print('Time elapsed: '+str(time.time() - start)+' s')
             
-            # Get temperature again
-            temptime, temp = get_temp(cmost=c)
-            cam.key('TEMP='+str(temp)+'//ZIF Socket temperature in Kelvin')
-            print('Socket temperature: '+str(temp)+' K')
+            set_gain(gain)
+            cam.set_basename(basename+'_singleflat_'+g)
+            cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
+            cam.expose(int(t),20,0)
+            print('Time elapsed: '+str(time.time() - start)+' s')
     
     # Switch off LED and camera
     print('Exposures complete, shutting down camera')
@@ -340,7 +365,24 @@ def dump_info(config_filepath):
     notes_file.close()
     
     return notes_filepath
+
+def get_ptc_setup(ledw):
+    '''
+    Get an ideal set of voltages for generating a PTC for the given LED
+    Assuming a log-spaced set of exposure times between 1 and 200s
+    '''
+    switch = {
+        '255': [4.5, 5.4, 6.2, 7.0],
+        '260': [4.5, 4.6, 4.85, 5.1],
+        '285': [4.35, 4.5, 4.6, 4.75],
+        '310': [3.7, 3.9, 4.1, 4.3],
+        '340': [3.42, 3.56, 3.70, 3.86],
+#        '372': [],
+        '800': [1.5, 1.55, 1.6, 1.65]
+    }
     
+    return switch.get(ledw,None)
+}
     
 def take_guiding_exposure(t,gain,basename,boi_start=200,boi_size=10):
     '''
@@ -442,14 +484,14 @@ def exp_UVEX_NUV_HDR(basename,first_exp): # NUV Exposure with guiding
 if __name__ == '__main__':
     '''
     Usage:
-    python cmost_camera.py EXPOSURESET CAMID DETID
+    python cmost_camera.py EXPOSURESET CAMID DETID LED
     '''
 
     # Get command line parameters
     if len(sys.argv) < 3:
         print('''
 Usage:
-    python cmost_camera.py standard CAMID DETID
+    python cmost_camera.py standard CAMID DETID LED
     python cmost_camera.py longdark CAMID DETID
             ''')
         exit()
@@ -461,8 +503,15 @@ Usage:
         else: camid = sys.argv[2]
         if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
         else: detid = sys.argv[3]
+        if len(sys.argv) < 5: ledw = raw_input('LED wavelength (nm): ')
+        else: ledw = sys.argv[4]
         
-        standard_analysis_exposures(camid,detid)
+        # Check LED wavelength is one we expect
+        if ledw not in ['255', '260', '285', '310', '340', '372', '800', 'None']:
+            print('LED wavelength options: 255, 260, 285, 310, 340, 372, 800, None. If None, no flats will be taken. Make sure the correct LED is selected on the camera before running this script!')
+            exit()
+        
+        standard_analysis_exposures(camid,detid,ledw=ledw)
     elif sys.argv[1] == 'longdark':
         print('Taking long darks (~9 hours)')
         if len(sys.argv) < 3: camid = raw_input('Camera ID (cmost or cmostjpl): ')
