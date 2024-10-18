@@ -2,7 +2,7 @@
 
 This package contains tools and notebooks for analyzing CMOST images
 
-## How to use
+## How to use Exposure()
 
 I/O is handled through the Exposure() class in cmost\_exposure.py. This class can:
 * read a FITS file
@@ -23,3 +23,31 @@ Analysis (plotting images, fitting lines etc.) is to be done using Jupyter noteb
 * 20210122\_PTC\_by\_LED\_voltage.pdf
 
 Do not put analysis code in cmost\_exposure.py, and if you find yourself repeatedly doing I/O steps in the notebooks, put it in cmost\_exposure.py. Do not do development on cmost\_exposure.py from the CMOST computer, as it is not set up to push changes back up to Github. Put in an issue here instead. 
+
+## Standard exposure sets and analysis
+
+A set of standardized analysis exposures can be taken using standard\_analysis\_exposures() in cmost\_camera.py. This takes an exposure set compatible with standard\_analysis\_products in cmost\_analysis.py. 
+
+To generate a report for a standard set of analysis exposures, run the following in a Python 3 environment:
+
+``` python cmost_analysis.py -g [path to data directory] ```
+
+This will generate a PDF report in the linked data directory. Warning: takes a while to generate, particularly for a large detector.
+
+All functions in cmost\_camera.py MUST be run using Python 2, for compatibility with PyArchon. Utility functions setup\_camera() and set\_gain() can be used to create custom data-taking scripts, and exp\_UVEX\_NUV\_dwell() is our current best representation of a standard NUV guiding dwell.
+
+
+
+Major standard analysis report update
+
+Includes:
+- Better parsing of directory contents
+- Graycoding support
+- Output in electrons rather than ADU
+- Readout time measurement
+- Long darks
+- Detector subframes used to build PTC, refined PTC fitting
+- Bad pixel map
+- General improvements to histogram pages
+- Some additional README content
+
