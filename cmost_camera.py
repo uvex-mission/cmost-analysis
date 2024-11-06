@@ -263,7 +263,7 @@ def standard_analysis_exposures(camid, detid, ledw='None', singleframe=True, bia
             print('Time elapsed: '+str(time.time() - start)+' s')
             
             set_gain(gain)
-            cam.set_basename(basename+'_singleflat_'+g)
+            cam.set_basename(basename+'_singleflat_'+gain)
             cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
             cam.expose(int(t),20,0)
             print('Time elapsed: '+str(time.time() - start)+' s')
@@ -329,6 +329,7 @@ def set_gain(gain):
         return False
     
     cam.key('GAIN='+gain)
+    cam.__send_command('longexposure','true')
     return True
 
 def dump_info(config_filepath):
@@ -382,7 +383,7 @@ def get_ptc_setup(ledw):
     }
     
     return switch.get(ledw,None)
-}
+
     
 def take_guiding_exposure(t,gain,basename,boi_start=200,boi_size=10):
     '''
