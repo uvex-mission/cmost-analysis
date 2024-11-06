@@ -156,7 +156,7 @@ class Exposure():
             frame_shape = cmost_file[1].data.shape
             # This file will have at least one unusable frame
             if self.readout_mode in ['DEFAULT','ROLLINGRESET','ROLLINGRESET_HDR']:
-                if cmost_hdr.get('NORESET') == 1:
+                if cmost_hdr.get('NORESET',0) == 1:
                     # Reset frame not saved, just ignore 0th Extension
                     ignore_ext = 1
                 else:
@@ -390,7 +390,11 @@ class Exposure():
             return var
         else:
             print('WARNING: Not enough frames to calculate variance')
-            return 0
+            if self.readout_mode in ['ROLLINGRESET_HDR']:
+                var = np.array([0, 0])
+            else:
+                var = 0
+            return var
 
     def cleanup_frames(self):
         '''
@@ -500,8 +504,12 @@ def scan_headers(directory,custom_keys=[]):
                 
                 # Get number of exposures in this file
                 if readout_mode in ['DEFAULT','ROLLINGRESET','ROLLINGRESET_HDR']:
-                    # Ignore 0th extension and first frame (data is meaningless)
-                    num_exp = hdu - 2
+                    if hdr.get('NORESET',0) == 1:
+                        # Reset frame has not been recorded
+                        num_exp = hdu - 1
+                    else:
+                        # Ignore 0th extension and first frame (data is meaningless)
+                        num_exp = hdu - 2
                 else:
                     # Just ignore 0th Extension
                     num_exp = hdu - 1
