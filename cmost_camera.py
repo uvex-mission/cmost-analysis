@@ -228,7 +228,7 @@ def standard_analysis_exposures(camid, detid, ledw='None', singleframe=True, bia
                         print('Flats for '+g+' gain')
                         set_gain(g)
                         # Min-length exposures
-                        cam.set_basename(basename+'_flat_'+g)
+                        cam.set_basename(basename+'_flat_'+g+'_'+str(voltage))
                         cam.key('EXPTIME=0//exposure time in seconds')
                         cam.expose(0,2,0)
                         # Loop through exposure times between 1 and ~200s
@@ -376,10 +376,10 @@ def get_ptc_setup(ledw):
         '255': [4.5, 5.4, 6.2, 7.0],
         '260': [4.5, 4.6, 4.85, 5.1],
         '285': [4.35, 4.5, 4.6, 4.75],
-        '310': [3.7, 3.9, 4.1, 4.3],
-        '340': [3.42, 3.56, 3.70, 3.86],
+        '310': [3.6, 4.0, 4.8, 5.6], #[3.7, 3.9, 4.1, 4.3],
+        '340': [3.8, 4.2, 5.4, 6.6], #[3.42, 3.56, 3.70, 3.86],
 #        '372': [],
-        '800': [1.5, 1.55, 1.6, 1.65]
+        '800': [1.55, 1.62, 1.68, 1.75] #[1.5, 1.55, 1.6, 1.65]
     }
     
     return switch.get(ledw,None)
