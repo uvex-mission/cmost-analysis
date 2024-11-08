@@ -263,7 +263,7 @@ def standard_analysis_exposures(camid, detid, ledw='None', singleframe=True, bia
             print('Time elapsed: '+str(time.time() - start)+' s')
             
             set_gain(gain)
-            cam.set_basename(basename+'_singleflat_'+gain)
+            cam.set_basename(basename+'_singleflat_'+gain+'_'+str(flatv))
             cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
             cam.expose(int(t),20,0)
             print('Time elapsed: '+str(time.time() - start)+' s')
@@ -373,11 +373,11 @@ def get_ptc_setup(ledw):
     Assuming a log-spaced set of exposure times between 1 and 200s
     '''
     switch = { # Calibrated for HfO - setup as of Nov 2024
-        '255': [4.5, 7.0, 9.0, 12.0], #[4.5, 5.4, 6.2, 7.0],
-        '260': [4.5, 5.5, 7.5, 9.5], #[4.5, 4.6, 4.85, 5.1],
+        '255': [4.0, 7.0, 9.0, 12.0], #[4.5, 5.4, 6.2, 7.0],
+        '260': [4.55, 5.0, 7.5, 9.5], #[4.5, 4.6, 4.85, 5.1],
         '285': [4.48, 4.8, 5.2, 5.5], #[4.35, 4.5, 4.6, 4.75],
-        '310': [3.5, 4.0, 4.8, 5.6], #[3.7, 3.9, 4.1, 4.3],
-        '340': [3.8, 4.2, 5.4, 6.6], #[3.42, 3.56, 3.70, 3.86],
+        '310': [3.8, 4.2, 5.4, 6.6], #[3.7, 3.9, 4.1, 4.3],
+        '340': [3.5, 4.0, 4.8, 5.6], #[3.42, 3.56, 3.70, 3.86],
 #        '372': [],
         '800': [1.55, 1.62, 1.68, 1.75] #[1.5, 1.55, 1.6, 1.65]
     }
