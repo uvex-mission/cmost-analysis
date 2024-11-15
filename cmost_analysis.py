@@ -66,7 +66,7 @@ def standard_analysis_products(dirname, **kwargs):
         notes_lines = notes_file.readlines()
         notes_file.close()
         
-    # Check for LED used
+    # Check for LED used from exposures taken under illumination
     is_ledwave = file_table['LEDWAVE'] != None
     if np.sum(is_ledwave) > 0:
         ledwave = np.unique(file_table['LEDWAVE'][is_ledwave].value)
@@ -82,6 +82,7 @@ def standard_analysis_products(dirname, **kwargs):
     
     # Plot settings
     gain_color = {'high (dual-gain)': 'tab:blue', 'low (dual-gain)': 'tab:orange', 'high': 'tab:green', 'low': 'tab:red'}
+    gain_line_color = {'high (dual-gain)': 'darkblue', 'low (dual-gain)': 'brown', 'high': 'darkgreen', 'low': 'darkred'}
     
     # Bad pixel map
     bad_pixel_map = np.zeros([exp.dev_size[1],exp.dev_size[0]])
@@ -427,18 +428,24 @@ def standard_analysis_products(dirname, **kwargs):
     
         #flat_present = 0
         if flat_present:
-            sat_flats, mid_flats, mid_flat_times, mid_flat_voltages = {}, {}, {}, {}
+            mid_flats, mid_flat_times, mid_flat_voltages = {}, {}, {}
             exp_times, med_sig, var, voltage = {}, {}, {}, {}
             for gain in ['hdr','high','low']:
-                gain_flats = (file_table['GAIN'] == gain) & (file_table['LED'] > 0)
+                #gain_flats = (file_table['GAIN'] == gain) & (file_table['LED'] > 0)
+                gain_flats = []
+                for f in file_table['FILEPATH']:
+                    if 'flat' in f: gain_flats.append(True)
+                    else: gain_flats.append(False)
+                gain_flats = (file_table['GAIN'] == gain) & np.array(gain_flats)
                 
                 if np.sum(gain_flats) > 0:
                     flat_files = file_table['FILEPATH'][gain_flats]
                     flat_frames = load_by_filepath(file_table['FILEPATH'][gain_flats], **kwargs)
                     exptime = file_table['EXPTIME'][gain_flats]
-                    led = file_table['LED'][gain_flats]
+                    led = [f.split('_')[4] for f in flat_files] # get LED voltage from filename
                     
                     led_vals = np.unique(led)
+                    exposure_times = np.unique(exptime)
                     max_exp, max_i = max(exptime), np.argmax(exptime)
 
                     if gain == 'hdr':
@@ -448,16 +455,13 @@ def standard_analysis_products(dirname, **kwargs):
                         n_subframes = (exp.dev_size[0] // 256) * (exp.dev_size[1] // 256)
                         for i in range(exp.dev_size[0] // 256):
                             for j in range(exp.dev_size[1] // 256):
-                                medians = np.append(medians, [ff.get_median((256*i,256*(i+1),256*j,256*(j+1))) for ff in flat_frames], axis=0)
-                                variance = np.append(variance, [ff.get_variance((256*i,256*(i+1),256*j,256*(j+1))) for ff in flat_frames], axis=0)
+                                x1, x2, y1, y2 = 256*i, 256*(i+1), 256*j, 256*(j+1)
+                                mask = bad_pixel_map[y1:y2,x1:x2]
+                                medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
+                                variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
                                 all_exp_times = np.append(all_exp_times, exptime)
                                 all_voltage = np.append(all_voltage, led)
                         medians, variance, all_exp_times, all_voltage = medians[1:], variance[1:], all_exp_times[1:], all_voltage[1:]
-                        '''
-                        medians = np.array([ff.get_median((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames])
-                        variance = np.array([ff.get_variance((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames])
-                        '''
-
                         exp_times['high (dual-gain)'], exp_times['low (dual-gain)'] = all_exp_times, all_exp_times
                         voltage['high (dual-gain)'], voltage['low (dual-gain)'] = all_voltage, all_voltage
                         med_sig['high (dual-gain)'], med_sig['low (dual-gain)'] = medians[:,0], medians[:,1]
@@ -484,15 +488,13 @@ def standard_analysis_products(dirname, **kwargs):
                         n_subframes = (exp.dev_size[0] // 256) * (exp.dev_size[1] // 256)
                         for i in range(exp.dev_size[0] // 256):
                             for j in range(exp.dev_size[1] // 256):
-                                medians = np.append(medians, [ff.get_median((256*i,256*(i+1),256*j,256*(j+1))) for ff in flat_frames], axis=0)
-                                variance = np.append(variance, [ff.get_variance((256*i,256*(i+1),256*j,256*(j+1))) for ff in flat_frames], axis=0)
+                                x1, x2, y1, y2 = 256*i, 256*(i+1), 256*j, 256*(j+1)
+                                mask = bad_pixel_map[y1:y2,x1:x2]
+                                medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
+                                variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
                                 all_exp_times = np.append(all_exp_times, exptime)
                                 all_voltage = np.append(all_voltage, led)
                         medians, variance, all_exp_times, all_voltage = medians[1:], variance[1:], all_exp_times[1:], all_voltage[1:]
-                        '''
-                        medians = np.array([ff.get_median((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames])
-                        variance = np.array([ff.get_variance((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames])
-                        '''
                         exp_times[gain] = all_exp_times
                         voltage[gain] = all_voltage
                         med_sig[gain] = medians
@@ -528,22 +530,32 @@ def standard_analysis_products(dirname, **kwargs):
             
             # Linearity and PTC plots
             fig = plt.figure(figsize=[8.5,11],dpi=300)
-            plt.suptitle(f'Linearity and photon transfer curves')
+            plt.suptitle(f'Linearity plots')
             
             ax1 = plt.subplot2grid((2,1), (0,0))
-            ax2 = plt.subplot2grid((2,1), (1,0))
+            ax2 = plt.subplot2grid((8,1), (4,0), sharex = ax1)
+            ax3 = plt.subplot2grid((8,1), (5,0), sharex = ax1)
+            ax4 = plt.subplot2grid((8,1), (6,0), sharex = ax1)
+            ax5 = plt.subplot2grid((8,1), (7,0), sharex = ax1)
+            plt.subplots_adjust(hspace=0)
             
             # Linearity curve
             plt.sca(ax1)
-            plt.title(f'Linearity')
             for g in med_sig:
                 for vol in led_vals:
-                    this_voltage_valid = (voltage[g] == vol) & (exp_times[g] > 0) & (med_sig[g] > 0) #& (var[g] > 0)
-                    sort_i = np.argsort(exp_times[g][this_voltage_valid])
-                    # Correct exposure times for the readout time
-                    if g in read_time: exptime = exp_times[g][this_voltage_valid][sort_i] + read_time[g]
-                    else: exptime = exp_times[g][this_voltage_valid][sort_i]
-                    plt.plot(exptime, med_sig[g][this_voltage_valid][sort_i], 'x--', label=f'{g}', color=gain_color[g])
+                    for t in exposure_times:
+                        this_voltage_valid = (voltage[g] == vol) & (exp_times[g] == t) & (med_sig[g] > 0)
+
+                        # Correct exposure times for the readout time
+                        if g in read_time: exptime = exp_times[g][this_voltage_valid] + read_time[g]
+                        else: exptime = exp_times[g][this_voltage_valid]
+                        
+                        if exptime[0] > 0:
+                            plt.scatter(exptime, med_sig[g][this_voltage_valid], marker='x', label=f'{g}', color=gain_color[g], alpha=0.05)
+                            plt.scatter(exptime[0], np.mean(med_sig[g][this_voltage_valid]), marker='x', label=f'{g}', color=gain_color[g])
+                    # Fit something to your set of medians
+                    # Linear fit to everything above 10 and less than 15000 or thereabouts. offset varies natch
+                    # Plot residuals from that fit altogether for each gain mode
             plt.xlabel('Exposure Time (s)')
             plt.ylabel('Median Signal (ADU)')
             plt.loglog()
@@ -551,14 +563,28 @@ def standard_analysis_products(dirname, **kwargs):
             handles, labels = plt.gca().get_legend_handles_labels()
             by_label = dict(zip(labels, handles))
             plt.legend(by_label.values(), by_label.keys(), fontsize=10,ncol=4,loc=8,bbox_to_anchor=(0.5, -0.2))
+            
+            #plt.tight_layout()
+            fig.text(0.96, 0.02, pdf.get_pagecount()+1)
+            pdf.savefig()
+            plt.close()
+            
+            # PTCs
+            fig = plt.figure(figsize=[8.5,11],dpi=300)
+            plt.suptitle(f'Photon Transfer Curve')
+            
+            ax1 = plt.subplot2grid((2,1), (0,0))
+            ax2 = plt.subplot2grid((2,1), (1,0))
 
             # PTC
             fit = fitting.LevMarLSQFitter(calc_uncertainties=True)
             fit_or = fitting.FittingWithOutlierRemoval(fit, sigma_clip, niter=5, sigma=3.5)
-            plt.sca(ax2)
-            plt.title(f'Photon Transfer Curve')
             for g in med_sig:
                 # Fit PTC for read noise level and gain
+                if (g == 'high (dual-gain)') | (g == 'low (dual-gain)'):
+                    plt.sca(ax1)
+                else:
+                    plt.sca(ax2)
 
                 # Determine the shot noise dominated region of the PTC
                 # Unsaturated and above the noise-floor-dominated region
@@ -595,24 +621,34 @@ def standard_analysis_products(dirname, **kwargs):
                         k_err = 0
                         
                     # Plot fit
-                    p = plt.plot(np.logspace(1,4.3), model_fit(np.logspace(1,4.3)), ls='--', label=f'{g} gain: {k:.3f} ± {k_err:.3f} e-/ADU')
+                    p = plt.plot(np.logspace(1,4.3), model_fit(np.logspace(1,4.3)), ls='--', color=gain_line_color[g],
+                                 label=f'{g} gain: {k:.3f} ± {k_err:.3f} e-/ADU')
                     
                     # Plot noise and well depth
-                    plt.plot([1,3e4],[noise_floor, noise_floor], ls='--', color='grey')
-                    plt.plot([max(med_sig[g]),max(med_sig[g])],[1,5e6], ls='--', color='grey')
+                    plt.plot([1,3e4],[noise_floor, noise_floor], ls='--', color=gain_line_color[g], alpha=0.5)
+                    plt.plot([max(med_sig[g]),max(med_sig[g])],[1,max(var[g])], ls='--', color=gain_line_color[g], alpha=0.5)
                     
                     # Determine properties
                     det_gain[g] = [k, k_err]
                     if g in read_noise: read_noise[g] = read_noise[g] * k
                     if g in dark_current: dark_current[g] = dark_current[g] * k
-                    well_depth[g] = max(med_sig[g]) * k
+                    well_depth[g] = np.nanmax(med_sig[g]) * k
                 except:
                     print(f'Problem fitting slope for gain mode {g}, skipping and using nominal gain')
-                    
+            
+            plt.sca(ax1)
             plt.legend(loc=2)
             plt.xlabel('Median Signal (ADU)')
             plt.ylabel('Variance (ADU^2)')
             plt.loglog()
+            plt.text(1, 0.8, 'Read Noise', color='grey')
+            
+            plt.sca(ax2)
+            plt.legend(loc=2)
+            plt.xlabel('Median Signal (ADU)')
+            plt.ylabel('Variance (ADU^2)')
+            plt.loglog()
+            plt.text(1, 0.8, 'Read Noise', color='grey')
 
             plt.tight_layout()
             fig.text(0.96, 0.02, pdf.get_pagecount()+1)

@@ -322,7 +322,7 @@ class Exposure():
                     self.gain, len(self.cds_frames), hdr_string, custom_key_str)
         return info_string
 
-    def get_mean(self, subframe):
+    def get_mean(self, subframe, mask=None):
         '''
         Calculate mean of subframe across all useable frames
         
@@ -330,6 +330,10 @@ class Exposure():
         ----------
         subframe : array, list or tuple
             Indices of the subframe in format (x1, x2, y1, y2)
+            
+        mask : 2-D int array
+            Array of same dimensions as subframe to mask bad pixels
+            Where mask > 0, pixel will be masked from calculation
 
         Returns
         -------
@@ -338,12 +342,23 @@ class Exposure():
         '''
         x1, x2, y1, y2 = subframe
         if self.readout_mode in ['ROLLINGRESET_HDR']:
-            m = np.mean(self.cds_frames[:,:,y1:y2,x1:x2],axis=(0,2,3))
+            if mask is not None:
+                mask = np.stack([mask]*self.cds_frames.shape[1])
+                mask = np.stack([mask]*self.cds_frames.shape[0])
+                masked_cds_frames = np.ma.masked_where(mask > 0, self.cds_frames[:,:,y1:y2,x1:x2])
+                m = np.ma.mean(masked_cds_frames,axis=(0,2,3))
+            else:
+                m = np.mean(self.cds_frames[:,:,y1:y2,x1:x2],axis=(0,2,3))
         else:
-            m = np.mean(self.cds_frames[:,y1:y2,x1:x2])
+            if mask is not None:
+                mask = np.stack([mask]*self.cds_frames.shape[0])
+                masked_cds_frames = np.ma.masked_where(mask > 0, self.cds_frames[:,y1:y2,x1:x2])
+                m = np.ma.mean(masked_cds_frames)
+            else:
+                m = np.mean(self.cds_frames[:,y1:y2,x1:x2])
         return m
 
-    def get_median(self, subframe):
+    def get_median(self, subframe, mask=None):
         '''
         Calculate median of subframe across all useable frames
         
@@ -351,6 +366,10 @@ class Exposure():
         ----------
         subframe : array, list or tuple
             Indices of the subframe in format (x1, x2, y1, y2)
+            
+        mask : 2-D int array
+            Array of same dimensions as subframe to mask bad pixels
+            Where mask > 0, pixel will be masked from calculation
 
         Returns
         -------
@@ -359,12 +378,23 @@ class Exposure():
         '''
         x1, x2, y1, y2 = subframe
         if self.readout_mode in ['ROLLINGRESET_HDR']:
-            m = np.median(self.cds_frames[:,:,y1:y2,x1:x2],axis=(0,2,3))
+            if mask is not None:
+                mask = np.stack([mask]*self.cds_frames.shape[1])
+                mask = np.stack([mask]*self.cds_frames.shape[0])
+                masked_cds_frames = np.ma.masked_where(mask > 0, self.cds_frames[:,:,y1:y2,x1:x2])
+                m = np.ma.median(masked_cds_frames,axis=(0,2,3))
+            else:
+                m = np.median(self.cds_frames[:,:,y1:y2,x1:x2],axis=(0,2,3))
         else:
-            m = np.median(self.cds_frames[:,y1:y2,x1:x2])
+            if mask is not None:
+                mask = np.stack([mask]*self.cds_frames.shape[0])
+                masked_cds_frames = np.ma.masked_where(mask > 0, self.cds_frames[:,y1:y2,x1:x2])
+                m = np.ma.median(masked_cds_frames)
+            else:
+                m = np.median(self.cds_frames[:,y1:y2,x1:x2])
         return m
 
-    def get_variance(self, subframe):
+    def get_variance(self, subframe, mask=None):
         '''
         Calculate variance of subframe of difference between first two useable frames
 
@@ -372,6 +402,10 @@ class Exposure():
         ----------
         subframe : array, list or tuple
             Indices of the subframe in format (x1, x2, y1, y2)
+            
+        mask : 2-D int array
+            Array of same dimensions as subframe to mask bad pixels
+            Where mask > 0, pixel will be masked from calculation
 
         Returns
         -------
@@ -383,10 +417,19 @@ class Exposure():
         if len(self.cds_frames) > 1:
             if self.readout_mode in ['ROLLINGRESET_HDR']:
                 diff = self.cds_frames[1,:,y1:y2,x1:x2] - self.cds_frames[0,:,y1:y2,x1:x2]
-                var = np.var(diff,axis=(1,2)) / 2
+                if mask is not None:
+                    mask = np.stack([mask]*diff.shape[0])
+                    masked_diff = np.ma.masked_where(mask > 0, diff)
+                    var = np.ma.var(masked_diff,axis=(1,2)) / 2
+                else:
+                    var = np.var(diff,axis=(1,2)) / 2
             else:
                 diff = self.cds_frames[1,y1:y2,x1:x2] - self.cds_frames[0,y1:y2,x1:x2]
-                var = np.var(diff) / 2
+                if mask is not None:
+                    masked_diff = np.ma.masked_where(mask > 0, diff)
+                    var = np.ma.var(masked_diff) / 2
+                else:
+                    var = np.var(diff) / 2
             return var
         else:
             print('WARNING: Not enough frames to calculate variance')
