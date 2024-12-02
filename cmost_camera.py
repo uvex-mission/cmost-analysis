@@ -72,6 +72,9 @@ def standard_analysis_exposures(camid, detid, ledw='None', singleframe=True, bia
     cam.set_param('InitFrame',1) # Apply initial reset frame but don't capture resulting image
     cam.key('NORESET=1//Reset frame has been removed') # For backwards compatiblity
     
+    # Turn off LEDWAVE parameter until needed
+    cam.key('LEDWAVE=.')
+    
     # Wait 25 mins for biases to settle after turning on camera
     print('Waiting for biases to settle (25 mins)...')
     time.sleep(1500)
@@ -88,7 +91,7 @@ def standard_analysis_exposures(camid, detid, ledw='None', singleframe=True, bia
             cam.set_basename(basename+'_singleframe_'+g)
             set_gain(g)
             exp_start = time.time()
-            cam.expose(0,1,0)
+            cam.expose(0,1,0) # Hack that incorporates FITS write time, only an approximation
             readout_time = time.time() - exp_start
             time_notes += g+': '+str(readout_time)+'\n'
         # Output time notes into the notes file
@@ -452,9 +455,6 @@ def exp_UVEX_NUV_HDR(basename,first_exp): # NUV Exposure with guiding
     print('Beginning NUV guiding HDR cycle')
     nuvtime = time.time()
     # Starts with 3s of guiding followed by a low gain readout followed by 300s of guiding followed by and HDR readout
-    cam.__send_command('longexposure','false')
-    cam.set_param('longexposure',0)
-    cam.key('longexposure=0// 1|0 means exposure in s|ms')
     set_gain('high') #Guiding pixels are in high gain mode
     cam.set_mode('GUIDING')
     cam.set_param('BOI_start',200) # First row of the Band Of Interest
@@ -462,7 +462,7 @@ def exp_UVEX_NUV_HDR(basename,first_exp): # NUV Exposure with guiding
         cam.set_param('InitFrame',1) # will apply initial reset frame but doesn't not capture the resulting image
     print('NUV short exp setup done, time elapsed: '+str(time.time() - nuvtime)+' s') # Should be negligible
     cam.set_basename(basename+'_UVEXNUV_1_3sguiding_')
-    cam.expose(1000,3,0) # 3 Guiding Frames at 1 Hz
+    cam.expose(1,3,0) # 3 Guiding Frames at 1 Hz
     print('3 guiding frames taken, time elapsed: '+str(time.time() - nuvtime)+' s')
     if first_exp:
         cam.set_param('InitFrame',0) # we do not want a reset frame before readout here.
@@ -473,7 +473,7 @@ def exp_UVEX_NUV_HDR(basename,first_exp): # NUV Exposure with guiding
     set_gain('high')
     cam.set_mode('GUIDING') #
     cam.set_basename(basename+'_UVEXNUV_3_300sguiding_')
-    cam.expose(1000,300,0) # 300 Guiding Frames
+    cam.expose(1,300,0) # 300 Guiding Frames
     print('300 guiding frames taken, time elapsed: '+str(time.time() - nuvtime)+' s')
     set_gain('hdr') # Mode to Full Frame HDR Rolling Reset
     cam.set_basename(basename+'_UVEXNUV_4_hdr_')
