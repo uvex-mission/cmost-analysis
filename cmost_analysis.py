@@ -6,7 +6,7 @@
     
     Run this with Python 3
     
-    Usage: python cmost_analysis.py data/20240413
+    Usage: python cmost_analysis.py -g data/20240413
 '''
 import os, sys
 sys.path.append('..')
@@ -143,8 +143,7 @@ def standard_analysis_products(dirname, **kwargs):
                     # So the actual time an exposure takes reading out is half this amount
                     read_time['high'] = float(notes_lines[i+1].split()[1]) / 2
                     read_time['low'] = float(notes_lines[i+2].split()[1]) / 2
-                    hdr_time = float(notes_lines[i+3].split()[1]) / 2
-                    read_time['high (dual-gain)'], read_time['low (dual-gain)'] = hdr_time, hdr_time
+                    read_time['hdr'] = float(notes_lines[i+3].split()[1]) / 2
         
         # Bias plots
         # Get bias frames
@@ -439,14 +438,21 @@ def standard_analysis_products(dirname, **kwargs):
                 gain_flats = (file_table['GAIN'] == gain) & np.array(gain_flats)
                 
                 if np.sum(gain_flats) > 0:
+                    # Load flat frame files
                     flat_files = file_table['FILEPATH'][gain_flats]
                     flat_frames = load_by_filepath(file_table['FILEPATH'][gain_flats], **kwargs)
                     exptime = file_table['EXPTIME'][gain_flats]
+                    if gain in read_time: exptime = exptime + read_time[gain]
                     led = [f.split('_')[4] for f in flat_files] # get LED voltage from filename
                     
                     led_vals = np.unique(led)
-                    exposure_times = np.unique(exptime)
                     max_exp, max_i = max(exptime), np.argmax(exptime)
+                    
+                    # Check whether we want to do masking - if >50% of pixels are bad, there's probably a deeper issue than the detector
+                    # So turn bad pixel masking off
+                    bad_frac = np.sum(bad_pixel_map) / bad_pixel_map.size
+                    if bad_frac < 0.5: domask = True
+                    else: domask = False
 
                     if gain == 'hdr':
                         # Loop through 256x256 chunks of the detector to get multiple subframe medians
@@ -456,9 +462,13 @@ def standard_analysis_products(dirname, **kwargs):
                         for i in range(exp.dev_size[0] // 256):
                             for j in range(exp.dev_size[1] // 256):
                                 x1, x2, y1, y2 = 256*i, 256*(i+1), 256*j, 256*(j+1)
-                                mask = bad_pixel_map[y1:y2,x1:x2]
-                                medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
-                                variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
+                                if domask:
+                                    mask = bad_pixel_map[y1:y2,x1:x2]
+                                    medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
+                                    variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
+                                else:
+                                    medians = np.append(medians, [ff.get_median((x1, x2, y1, y2)) for ff in flat_frames], axis=0)
+                                    variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2)) for ff in flat_frames], axis=0)
                                 all_exp_times = np.append(all_exp_times, exptime)
                                 all_voltage = np.append(all_voltage, led)
                         medians, variance, all_exp_times, all_voltage = medians[1:], variance[1:], all_exp_times[1:], all_voltage[1:]
@@ -489,9 +499,13 @@ def standard_analysis_products(dirname, **kwargs):
                         for i in range(exp.dev_size[0] // 256):
                             for j in range(exp.dev_size[1] // 256):
                                 x1, x2, y1, y2 = 256*i, 256*(i+1), 256*j, 256*(j+1)
-                                mask = bad_pixel_map[y1:y2,x1:x2]
-                                medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
-                                variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
+                                if domask:
+                                    mask = bad_pixel_map[y1:y2,x1:x2]
+                                    medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
+                                    variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
+                                else:
+                                    medians = np.append(medians, [ff.get_median((x1, x2, y1, y2)) for ff in flat_frames], axis=0)
+                                    variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2)) for ff in flat_frames], axis=0)
                                 all_exp_times = np.append(all_exp_times, exptime)
                                 all_voltage = np.append(all_voltage, led)
                         medians, variance, all_exp_times, all_voltage = medians[1:], variance[1:], all_exp_times[1:], all_voltage[1:]
@@ -527,47 +541,84 @@ def standard_analysis_products(dirname, **kwargs):
                 
                 # Create a standard histogram page and save it to the pdf
                 hist_page(pdf, flat, f'Mid-range flat frame - gain: {g}', summary_text, precision=min([50,mmax/50]))
+                
+            # Set up fitter and model (a PL set to linear solution)
+            fit = fitting.LMLSQFitter(calc_uncertainties=True)
+            fit_or = fitting.FittingWithOutlierRemoval(fit, sigma_clip, niter=5, sigma=3.5)
+            model = PowerLaw1D(amplitude=1, x_0=1, alpha=-1, fixed={'x_0': True, 'alpha': True})
             
             # Linearity and PTC plots
-            fig = plt.figure(figsize=[8.5,11],dpi=300)
-            plt.suptitle(f'Linearity plots')
-            
-            ax1 = plt.subplot2grid((2,1), (0,0))
-            ax2 = plt.subplot2grid((8,1), (4,0), sharex = ax1)
-            ax3 = plt.subplot2grid((8,1), (5,0), sharex = ax1)
-            ax4 = plt.subplot2grid((8,1), (6,0), sharex = ax1)
-            ax5 = plt.subplot2grid((8,1), (7,0), sharex = ax1)
-            plt.subplots_adjust(hspace=0)
             
             # Linearity curve
-            plt.sca(ax1)
             for g in med_sig:
-                for vol in led_vals:
-                    for t in exposure_times:
-                        this_voltage_valid = (voltage[g] == vol) & (exp_times[g] == t) & (med_sig[g] > 0)
+                # Each gain gets its own page
+                fig = plt.figure(figsize=[8.5,11],dpi=300)
+                plt.suptitle(f'Linearity plots')
+                
+                gs_top = plt.GridSpec(2, 1, top=0.9)
+                ax1 = fig.add_subplot(gs_top[0,:])
 
-                        # Correct exposure times for the readout time
-                        if g in read_time: exptime = exp_times[g][this_voltage_valid] + read_time[g]
-                        else: exptime = exp_times[g][this_voltage_valid]
-                        
-                        if exptime[0] > 0:
-                            plt.scatter(exptime, med_sig[g][this_voltage_valid], marker='x', label=f'{g}', color=gain_color[g], alpha=0.05)
-                            plt.scatter(exptime[0], np.mean(med_sig[g][this_voltage_valid]), marker='x', label=f'{g}', color=gain_color[g])
-                    # Fit something to your set of medians
-                    # Linear fit to everything above 10 and less than 15000 or thereabouts. offset varies natch
-                    # Plot residuals from that fit altogether for each gain mode
-            plt.xlabel('Exposure Time (s)')
-            plt.ylabel('Median Signal (ADU)')
-            plt.loglog()
-            # Avoid duplicate legend labels
-            handles, labels = plt.gca().get_legend_handles_labels()
-            by_label = dict(zip(labels, handles))
-            plt.legend(by_label.values(), by_label.keys(), fontsize=10,ncol=4,loc=8,bbox_to_anchor=(0.5, -0.2))
+                # A subplot for each voltage (we expect 4)
+                gs_bottom = gs_base = plt.GridSpec(9, 1, hspace=0)
+                ax2 = fig.add_subplot(gs_base[5,:])
+                ax3 = fig.add_subplot(gs_base[6,:], sharex = ax2)
+                ax4 = fig.add_subplot(gs_base[7,:], sharex = ax2)
+                ax5 = fig.add_subplot(gs_base[8,:], sharex = ax2)
+                vol_subplots = [ax5,ax4,ax3,ax2]
+                plt.subplots_adjust(hspace=0)
             
-            #plt.tight_layout()
-            fig.text(0.96, 0.02, pdf.get_pagecount()+1)
-            pdf.savefig()
-            plt.close()
+                for i, vol in enumerate(led_vals):
+                    plt.sca(ax1)
+                    means = np.array([])
+                    exposure_times = np.unique(exp_times[g])
+                    this_voltage = voltage[g] == vol
+                    
+                    # Get mean over detector subframes
+                    for t in exposure_times:
+                        this_voltage_time = this_voltage & (exp_times[g] == t)
+                        means = np.append(means, np.mean(med_sig[g][this_voltage_time]))
+                    
+                    # Plot signal and mean signal
+                    plt.scatter(exp_times[g][this_voltage], med_sig[g][this_voltage], marker='x', label=f'{g}', color=gain_color[g], alpha=0.05)
+                    plt.scatter(exposure_times, means, marker='x', label=f'{g}', color=gain_color[g])
+                    
+                    # Fit line to the set of means above 10 and less than the rough saturation level
+                    for_fitting = (means > 10) & (means < (max(med_sig[g]) - 5000))
+                    model_fit, mask = fit_or(model, exposure_times[for_fitting], means[for_fitting], maxiter=100)
+                    plt.plot(np.logspace(-0.3,2.4),model_fit(np.logspace(-0.3,2.4)), ls='--', color=gain_line_color[g])
+                    if model_fit(0.8) > 0.5: plt.text(1.3,model_fit(0.8),f'{vol} V')
+                    else: plt.text(150,model_fit(250),f'{vol} V')
+                    
+                    # Plot residuals from that fit altogether for each voltage as % from fit
+                    plt.sca(vol_subplots[i])
+                    plt.plot([0.5,30000],[0,0],ls='--',color='gray')
+                    resid = (med_sig[g][this_voltage] - model_fit(exp_times[g][this_voltage])) / model_fit(exp_times[g][this_voltage]) * 100
+                    resid_means = (means - model_fit(exposure_times)) / model_fit(exposure_times) * 100
+                    plt.scatter(med_sig[g][this_voltage], resid, marker='x', label=f'{g}', color=gain_color[g], alpha=0.05)
+                    plt.scatter(means, resid_means, marker='x', label=f'{g}', color=gain_color[g])
+                    plt.text(0.02,0.1,f'{vol} V',transform=vol_subplots[i].transAxes)
+                    plt.semilogx()
+                    plt.xlim(0.5,30000)
+            
+                plt.sca(ax1)
+                plt.xlabel('Exposure Time (s)')
+                plt.ylabel('Median Signal (ADU)')
+                plt.xlim(1.1,250)
+                plt.ylim(0.5,30000)
+                plt.loglog()
+                
+                # Avoid duplicate legend labels
+                handles, labels = plt.gca().get_legend_handles_labels()
+                by_label = dict(zip(labels, handles))
+                plt.legend(by_label.values(), by_label.keys(), fontsize=10,ncol=4,loc=8,bbox_to_anchor=(0.5, 1.0))
+                
+                ax3.set_ylabel('% deviation from linear fit')
+                ax5.set_xlabel('Signal (ADU)')
+                
+                #plt.tight_layout()
+                fig.text(0.96, 0.02, pdf.get_pagecount()+1)
+                pdf.savefig()
+                plt.close()
             
             # PTCs
             fig = plt.figure(figsize=[8.5,11],dpi=300)
@@ -577,8 +628,6 @@ def standard_analysis_products(dirname, **kwargs):
             ax2 = plt.subplot2grid((2,1), (1,0))
 
             # PTC
-            fit = fitting.LevMarLSQFitter(calc_uncertainties=True)
-            fit_or = fitting.FittingWithOutlierRemoval(fit, sigma_clip, niter=5, sigma=3.5)
             for g in med_sig:
                 # Fit PTC for read noise level and gain
                 if (g == 'high (dual-gain)') | (g == 'low (dual-gain)'):
@@ -588,7 +637,8 @@ def standard_analysis_products(dirname, **kwargs):
 
                 # Determine the shot noise dominated region of the PTC
                 # Unsaturated and above the noise-floor-dominated region
-                valid = (var[g] > 0) & (med_sig[g] > 100) & (med_sig[g] < 10000)
+                rough_sat_level = np.minimum(max(med_sig[g]) - 5000, 10000) # We expect saturation to be well above 10k but want to handle other cases
+                valid = (var[g] > 0) & (med_sig[g] > 100) & (med_sig[g] < rough_sat_level)
                 if np.sum(valid) > 0:
                     # Subtract the noise
                     if g in read_noise:
@@ -600,8 +650,6 @@ def standard_analysis_products(dirname, **kwargs):
                 else:
                     # Nothing valid here for this gain, skip
                     continue
-
-                model = PowerLaw1D(amplitude=1, x_0=1, alpha=-1, fixed={'x_0': True, 'alpha': True})
                 
                 try:
                     # Fit while rejecting outliers and not over-weighting high signal data points
@@ -619,13 +667,13 @@ def standard_analysis_products(dirname, **kwargs):
                     else:
                         print('Error with calculating gain covariance')
                         k_err = 0
-                        
+                    
                     # Plot fit
                     p = plt.plot(np.logspace(1,4.3), model_fit(np.logspace(1,4.3)), ls='--', color=gain_line_color[g],
                                  label=f'{g} gain: {k:.3f} ± {k_err:.3f} e-/ADU')
                     
                     # Plot noise and well depth
-                    plt.plot([1,3e4],[noise_floor, noise_floor], ls='--', color=gain_line_color[g], alpha=0.5)
+                    plt.plot([1,2e4],[noise_floor, noise_floor], ls='--', color=gain_line_color[g], alpha=0.5)
                     plt.plot([max(med_sig[g]),max(med_sig[g])],[1,max(var[g])], ls='--', color=gain_line_color[g], alpha=0.5)
                     
                     # Determine properties
