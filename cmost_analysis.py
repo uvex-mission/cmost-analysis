@@ -18,6 +18,7 @@ import matplotlib
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.ticker as mticker
 from astropy.stats import sigma_clip
 from astropy.modeling import fitting
 from astropy.modeling.models import PowerLaw1D
@@ -45,18 +46,17 @@ def standard_analysis_products(dirname, **kwargs):
     datestring = f[-1][0:4]+'-'+f[-1][4:6]+'-'+f[-1][6:8]
     
     # Load first file that's not a guiding file (otherwise doesn't matter which it is) for device information
-    non_guiding = ['guiding' not in f for f in file_table['FILEPATH']]
+    non_guiding = [('guiding' not in f) for f in file_table['FILEPATH']]
     exp = Exposure(file_table[non_guiding][0]['FILEPATH'])
     
     # Scan through files to find out what's available
-    bias_present, dark_present, flat_present, longdark_present, flatdark_present, singleframe_present = 0, 0, 0, 0, 0, 0
+    bias_present, dark_present, flat_present, longdark_present, singleframe_present = 0, 0, 0, 0, 0
     notes_present = 0
     for f in file_table['FILEPATH']:
         if 'bias' in f: bias_present = 1
         if 'guidingdark' in f: dark_present = 1
         if 'longdark' in f: longdark_present = 1
         if 'flat_' in f: flat_present = 1
-        if 'flatdark_' in f: flatdark_present = 1
         if 'singleframe' in f: singleframe_present = 1
     
     # Check for notes file
@@ -135,7 +135,6 @@ def standard_analysis_products(dirname, **kwargs):
         plt.close()
         
         # Get frame readout time
-        #single_present = 0
         if singleframe_present and notes_present:
             for i, l in enumerate(notes_lines):
                 if l.startswith('Readout times:'):
@@ -148,23 +147,26 @@ def standard_analysis_products(dirname, **kwargs):
         # Bias plots
         # Get bias frames
         # We expect one bias file with 100 frames per gain mode: high, low, HDR
-        #bias_present = 0
         if bias_present:
-            bias_frames = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias', **kwargs)
-            
-            med_bias_frames, var, noise_map = {}, {}, {}
-            for bifr in bias_frames:
-                # For each gain mode, print a page of plots
-                if bifr.gain == 'hdr':
-                    med_bias_frames['high (dual-gain)'] = np.median(bifr.cds_frames[:,0],axis=0)
-                    med_bias_frames['low (dual-gain)'] = np.median(bifr.cds_frames[:,1],axis=0)
-                    noise_map['high (dual-gain)'] = np.std(bifr.cds_frames[:,0],axis=0)
-                    noise_map['low (dual-gain)'] = np.std(bifr.cds_frames[:,1],axis=0)
-                else:
-                    med_bias_frames[bifr.gain] = np.median(bifr.cds_frames,axis=0)
-                    noise_map[bifr.gain] = np.std(bifr.cds_frames,axis=0)
-                n_frame = len(bifr.cds_frames)
+            # Loop through the gain modes and load each bias frame individually
+            # These files are *very* large
+            med_bias_frames, noise_map, n_frame = {}, {}, {}
+            for gain in ['hdr','high','low']:
+                #bias_frames = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias', **kwargs)
+                bifr = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias_{gain}', **kwargs)[0]
 
+                # For each gain mode, print a page of plots
+                if gain == 'hdr':
+                    med_bias_frames['high (dual-gain)'] = np.nanmedian(bifr.cds_frames[:,0],axis=0)
+                    med_bias_frames['low (dual-gain)'] = np.nanmedian(bifr.cds_frames[:,1],axis=0)
+                    noise_map['high (dual-gain)'] = np.nanstd(bifr.cds_frames[:,0],axis=0)
+                    noise_map['low (dual-gain)'] = np.nanstd(bifr.cds_frames[:,1],axis=0)
+                    n_frame['high (dual-gain)'], n_frame['low (dual-gain)'] = len(bifr.cds_frames), len(bifr.cds_frames)
+                else:
+                    med_bias_frames[gain] = np.nanmedian(bifr.cds_frames,axis=0)
+                    noise_map[gain] = np.nanstd(bifr.cds_frames,axis=0)
+                    n_frame[gain] = len(bifr.cds_frames)
+            
             noise_map_e = {}
             for g in med_bias_frames:
                 med_bias = med_bias_frames[g] * nom_gain[g]
@@ -172,7 +174,7 @@ def standard_analysis_products(dirname, **kwargs):
                 mmin, mmax = min(med_bias.flatten()), max(med_bias.flatten())
                 
                 summary_text = f'Gain mode: {g} (nominal gain {nom_gain[g]} e-/ADU)\n'
-                summary_text += f'Median of {n_frame} minimum-length exposures\n'
+                summary_text += f'Median of {n_frame[g]} minimum-length exposures\n'
                 summary_text += f'Min median pixel value: {mmin:.1f} e-; max median pixel value: {mmax:.1f} e- \n'
                 
                 # Create a standard histogram page and save it to the pdf
@@ -181,18 +183,20 @@ def standard_analysis_products(dirname, **kwargs):
                 noise_map_e[g] = noise_map[g] * nom_gain[g]
                 nmin, nmax = min(noise_map_e[g].flatten()), max(noise_map_e[g].flatten())
                 
-                # Define bad pixels as having catastrophically bad noise (say 100 e-)
-                bad_thresh = 100
-                percent_bad = np.sum(noise_map_e[g] >= bad_thresh) / noise_map_e[g].size * 100
-                bad_pixel_map[noise_map_e[g] >= bad_thresh] = 1
+                # Define bad pixels as having noise above 3e- threshold in high gain
+                bad_thresh = 3
+                if (g == 'high') | (g == 'high (dual-gain)'):
+                    percent_bad = np.sum(noise_map_e[g] >= bad_thresh) / noise_map_e[g].size * 100
+                    bad_pixel_map[noise_map_e[g] >= bad_thresh] = 1
                 
                 # Calculate RMS read noise after filtering out catastrophically bad pixels
-                read_noise[g] = np.sqrt(np.mean(noise_map[g][noise_map_e[g] < bad_thresh]**2))
+                read_noise[g] = np.sqrt(np.nanmean(noise_map[g][noise_map_e[g] < 100]**2))
                 
                 summary_text = f'Gain mode: {g} (nominal gain {nom_gain[g]} e-/ADU)\n'
+                summary_text += f'Noise map over {n_frame[g]} minimum-length exposures\n'
                 summary_text += f'Min noise value: {nmin:.1f} e-; max noise value: {nmax:.1f} e- \n'
                 summary_text += f'Read noise (RMS): {read_noise[g]*nom_gain[g]:.2f} e-\n'
-                summary_text += f'Percentage above {bad_thresh} e-: {percent_bad:.2f} %\n'
+                if (g == 'high') | (g == 'high (dual-gain)'): summary_text += f'Percentage above {bad_thresh} e-: {percent_bad:.2f} %\n'
                 
                 # Also plot read noise map and histogram
                 hist_page(pdf, noise_map_e[g], f'Noise map - gain: {g}', summary_text, precision=0.1, unit='Read Noise (e-)')
@@ -234,9 +238,8 @@ def standard_analysis_products(dirname, **kwargs):
             bias_note = ', bias subtracted'
         else:
             bias_note = ''
-                
+        
         # Long darks
-        #longdark_present = 0
         if longdark_present:
             # Load long dark frames
             longdark_frames = load_by_file_prefix(f'{dirname}/{camera}_{detid}_longdark', **kwargs)
@@ -277,7 +280,7 @@ def standard_analysis_products(dirname, **kwargs):
                 dmin, dmax, dmedian, dmean = min(frame.flatten()), max(frame.flatten()), np.median(frame), np.mean(frame)
                 bad_thresh = 0.003
                 percent_bad = np.sum(frame > bad_thresh) / frame.size * 100
-                if (g == 'high') | (g == 'high (dual-gain)'): bad_pixel_map[frame > bad_thresh] = 1
+                if (g == 'high') | (g == 'high (dual-gain)'): bad_pixel_map[frame > bad_thresh] = 2
                 # Dark current 'measurement' is the 99% percentile
                 dark_current[g] = np.percentile(frame,99)
                 
@@ -285,7 +288,7 @@ def standard_analysis_products(dirname, **kwargs):
                 summary_text += f'Exposure time {exp_time} s, boxcar-smoothed with width=5\n'
                 summary_text += f'Min median pixel value: {dmin:.4f} e-/s; max median pixel value: {dmax:.4f} e-/s \n'
                 summary_text += f'Median pixel value: {dmedian:.4f} e-/s; mean pixel value: {dmean:.4f} e-/s\n'
-                summary_text += f'Percentage above {bad_thresh} e-/s: {percent_bad:.2f} %; 99% percentile: {dark_current[g]:.4f} e-/s\n'
+                if (g == 'high') | (g == 'high (dual-gain)'): summary_text += f'Percentage above {bad_thresh} e-/s: {percent_bad:.2f} %; 99% percentile: {dark_current[g]:.4f} e-/s\n'
                 
                 # Boxcar smooth for plotting and histogram
                 smoothed_dark = convolve(frame, Box2DKernel(5))
@@ -299,7 +302,6 @@ def standard_analysis_products(dirname, **kwargs):
 
         # Standard operating darks
         # Get darks
-        #dark_present = 0
         if dark_present:
             for mode in ['FUVdark','NUVdark','NUVguidingdark']:
                 if mode == 'FUVdark':
@@ -425,18 +427,17 @@ def standard_analysis_products(dirname, **kwargs):
                 pdf.savefig()
                 plt.close()
     
-        #flat_present = 0
         if flat_present:
             mid_flats, mid_flat_times, mid_flat_voltages = {}, {}, {}
             exp_times, med_sig, var, voltage = {}, {}, {}, {}
-            for gain in ['hdr','high','low']:
-                #gain_flats = (file_table['GAIN'] == gain) & (file_table['LED'] > 0)
-                gain_flats = []
-                for f in file_table['FILEPATH']:
-                    if 'flat' in f: gain_flats.append(True)
-                    else: gain_flats.append(False)
-                gain_flats = (file_table['GAIN'] == gain) & np.array(gain_flats)
+            allflats = []
+            for f in file_table['FILEPATH']:
+                if 'flat' in f: allflats.append(True)
+                else: allflats.append(False)
                 
+            for gain in ['hdr','high','low']:
+                gain_flats = (file_table['GAIN'] == gain) & np.array(allflats)
+
                 if np.sum(gain_flats) > 0:
                     # Load flat frame files
                     flat_files = file_table['FILEPATH'][gain_flats]
@@ -448,9 +449,9 @@ def standard_analysis_products(dirname, **kwargs):
                     led_vals = np.unique(led)
                     max_exp, max_i = max(exptime), np.argmax(exptime)
                     
-                    # Check whether we want to do masking - if >50% of pixels are bad, there's probably a deeper issue than the detector
-                    # So turn bad pixel masking off
-                    bad_frac = np.sum(bad_pixel_map) / bad_pixel_map.size
+                    # Check whether we want to do masking of existing bad pixels
+                    # If >50% of pixels are bad, there's probably a deeper issue, so turn bad pixel masking off
+                    bad_frac = np.sum((bad_pixel_map > 0)) / bad_pixel_map.size
                     if bad_frac < 0.5: domask = True
                     else: domask = False
 
@@ -531,10 +532,10 @@ def standard_analysis_products(dirname, **kwargs):
                 # Define bad pixels as particularly low-gain, having 5-sigma lower signal than median pixel
                 bad_thresh = mmean - 5*np.std(flat)
                 percent_bad = np.sum(flat < bad_thresh) / flat.size * 100
-                bad_pixel_map[flat < bad_thresh] = 1
+                bad_pixel_map[flat < bad_thresh] = 3
 
                 summary_text = f'Gain mode: {g}{bias_note}\n'
-                summary_text += f'Illuminated {mid_flat_times[g]}s exposure; LED at {mid_flat_voltages[g]} V\n'
+                summary_text += f'Illuminated {mid_flat_times[g]:.1f}s exposure; LED at {mid_flat_voltages[g]} V\n'
                 summary_text += f'Min pixel value: {mmin:.1f} e-; max pixel value: {mmax:.1f} e- \n'
                 summary_text += f'Median pixel value: {mmedian:.1f} e-; mean pixel value: {mmean:.1f} e-\n'
                 summary_text += f'Percentage below {bad_thresh:.1f} e-/s (5-sigma below mean): {percent_bad:.2f} %\n'
@@ -566,7 +567,8 @@ def standard_analysis_products(dirname, **kwargs):
                 ax5 = fig.add_subplot(gs_base[8,:], sharex = ax2)
                 vol_subplots = [ax5,ax4,ax3,ax2]
                 plt.subplots_adjust(hspace=0)
-            
+                
+                led_vals = np.unique(voltage[g])
                 for i, vol in enumerate(led_vals):
                     plt.sca(ax1)
                     means = np.array([])
@@ -584,18 +586,26 @@ def standard_analysis_products(dirname, **kwargs):
                     
                     # Fit line to the set of means above 10 and less than the rough saturation level
                     for_fitting = (means > 10) & (means < (max(med_sig[g]) - 5000))
-                    model_fit, mask = fit_or(model, exposure_times[for_fitting], means[for_fitting], maxiter=100)
-                    plt.plot(np.logspace(-0.3,2.4),model_fit(np.logspace(-0.3,2.4)), ls='--', color=gain_line_color[g])
-                    if model_fit(0.8) > 0.5: plt.text(1.3,model_fit(0.8),f'{vol} V')
-                    else: plt.text(150,model_fit(250),f'{vol} V')
+                    if np.sum(for_fitting) > 1:
+                        model_fit, mask = fit_or(model, exposure_times[for_fitting], means[for_fitting], maxiter=100)
+                        plt.plot(np.logspace(-0.3,2.4),model_fit(np.logspace(-0.3,2.4)), ls='--', color=gain_line_color[g])
+                        if model_fit(0.8) > 0.5: plt.text(1.3,model_fit(0.8),f'{vol} V')
+                        else: plt.text(150,model_fit(250),f'{vol} V')
                     
-                    # Plot residuals from that fit altogether for each voltage as % from fit
+                        # Plot residuals from that fit altogether for each voltage as % from fit
+                        plt.sca(vol_subplots[i])
+                        plt.plot([0.5,30000],[0,0],ls='--',color='gray')
+                        resid = (med_sig[g][this_voltage] - model_fit(exp_times[g][this_voltage])) / model_fit(exp_times[g][this_voltage]) * 100
+                        resid_means = (means - model_fit(exposure_times)) / model_fit(exposure_times) * 100
+                        plt.scatter(med_sig[g][this_voltage], resid, marker='x', label=f'{g}', color=gain_color[g], alpha=0.05)
+                        plt.scatter(means, resid_means, marker='x', label=f'{g}', color=gain_color[g])
+                        plt.text(0.02,0.1,f'{vol} V',transform=vol_subplots[i].transAxes)
+                        plt.semilogx()
+                        plt.xlim(0.5,30000)
+                else:
+                    plt.text(1.3,max(med_sig[g][this_voltage]),f'{vol} V')
                     plt.sca(vol_subplots[i])
                     plt.plot([0.5,30000],[0,0],ls='--',color='gray')
-                    resid = (med_sig[g][this_voltage] - model_fit(exp_times[g][this_voltage])) / model_fit(exp_times[g][this_voltage]) * 100
-                    resid_means = (means - model_fit(exposure_times)) / model_fit(exposure_times) * 100
-                    plt.scatter(med_sig[g][this_voltage], resid, marker='x', label=f'{g}', color=gain_color[g], alpha=0.05)
-                    plt.scatter(means, resid_means, marker='x', label=f'{g}', color=gain_color[g])
                     plt.text(0.02,0.1,f'{vol} V',transform=vol_subplots[i].transAxes)
                     plt.semilogx()
                     plt.xlim(0.5,30000)
@@ -711,9 +721,12 @@ def standard_analysis_products(dirname, **kwargs):
             plt.suptitle('Bad pixel map')
             ax1 = plt.subplot2grid((5,1), (0,0), rowspan=2)
             plt.sca(ax1)
-            plt.imshow(bad_pixel_map, cmap='Reds')
-            percentage_bad = np.sum(bad_pixel_map) / bad_pixel_map.size * 100
+            bad_color_map = matplotlib.colors.ListedColormap(['white', 'red', 'blue', 'limegreen'])
+            plt.imshow(bad_pixel_map+0.5, cmap=bad_color_map, vmin=0, vmax=4)
+            percentage_bad = np.sum((bad_pixel_map > 0)) / bad_pixel_map.size * 100
             plt.text(0.0, -0.3, f'Number of bad pixels: {np.sum(bad_pixel_map)} ({percentage_bad:.2f} %)', transform=ax1.transAxes, verticalalignment='top')
+            plt.colorbar(orientation='horizontal', label='Bad pixel type', ticks=[0.5,1.5,2.5,3.5],
+                         format=mticker.FixedFormatter(['Good', 'High Noise', 'High Dark', 'Low Sensitivity']))
             pdf.savefig()
             plt.close()
         
@@ -776,7 +789,8 @@ def hist_page(pdf, data, title, summary_text, unit='e-', precision=1, contours=F
     ax3 = plt.subplot2grid((5,2), (2,1), rowspan=2)
                     
     plt.sca(ax1)
-    plt.imshow(data, vmin=np.percentile(data,0.01), vmax=np.percentile(data,99.9))
+    # Scale to median +/- 3-sigma to have outliers pop out
+    plt.imshow(data, vmin=np.percentile(data,0.03), vmax=np.percentile(data,99.7))
     plt.colorbar(label=unit, shrink=0.9)
     if contours:
         plt.contour(gaussian_filter(data,2), levels=contours, colors='r', linewidths=0.5)
