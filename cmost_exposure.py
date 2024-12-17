@@ -172,12 +172,13 @@ class Exposure():
             frame_shape = cmost_file[0].data.shape
     
         useable_frames = len(cmost_file) - ignore_ext
-    
+        
         self.raw_frames = np.zeros([useable_frames,frame_shape[0],frame_shape[1]])
         for i in range(useable_frames):
             # Frame data is in uint16 or uint32 by default, open in uint32
             self.raw_frames[i] = np.array(cmost_file[i+ignore_ext].data, dtype=np.uint32)
-
+            del cmost_file[i+ignore_ext].data # Remove this extension from memory
+        
         # Perform CDS on the frames
         self.perform_cds()
         
