@@ -6,7 +6,7 @@
     
     Run this with Python 3
     
-    Usage: python cmost_analysis.py -g data/20240413
+    Usage: python cmost_analysis.py [-g] [-s 0,1023,0,4095] data/20240413
 '''
 import os, sys
 sys.path.append('..')
@@ -44,10 +44,13 @@ def standard_analysis_products(dirname, **kwargs):
     camera = f[0]
     detid = f[1]
     datestring = f[-1][0:4]+'-'+f[-1][4:6]+'-'+f[-1][6:8]
+    filedatestring = f[-1][0:8]
     
     # Load first file that's not a guiding file (otherwise doesn't matter which it is) for device information
     non_guiding = [('guiding' not in f) for f in file_table['FILEPATH']]
     exp = Exposure(file_table[non_guiding][0]['FILEPATH'])
+    cw = exp.col_width
+    n_channels = exp.dev_size[0] // cw
     
     # Scan through files to find out what's available
     bias_present, dark_present, flat_present, longdark_present, singleframe_present = 0, 0, 0, 0, 0
@@ -85,11 +88,18 @@ def standard_analysis_products(dirname, **kwargs):
     gain_line_color = {'high (dual-gain)': 'darkblue', 'low (dual-gain)': 'brown', 'high': 'darkgreen', 'low': 'darkred'}
     
     # Bad pixel map
-    bad_pixel_map = np.zeros([exp.dev_size[1],exp.dev_size[0]])
+    if 'subframe' in kwargs:
+        subframe = kwargs['subframe']
+        x, y = subframe[1]-subframe[0]+1, subframe[3]-subframe[2]+1
+        bad_pixel_map = np.zeros([x,y])
+        doc_name = f'{filedatestring}_{camera}_{detid}{subframe}_analysis_report_{time.strftime("%Y%m%d%H%M%S")}.pdf'
+    else:
+        bad_pixel_map = np.zeros([exp.dev_size[1],exp.dev_size[0]])
+        doc_name = f'{filedatestring}_{camera}_{detid}_analysis_report_{time.strftime("%Y%m%d%H%M%S")}.pdf'
     
     # Initialize report document
-    with PdfPages(os.path.join(dirname,f'{camera}_{detid}_analysis_report_{time.strftime("%Y%m%d%H%M%S")}.pdf')) as pdf:
-    #with PdfPages(os.path.join(dirname,f'analysis_report_test.pdf')) as pdf:
+    #doc_name = f'analysis_report_test.pdf'
+    with PdfPages(os.path.join(dirname,doc_name)) as pdf:
     
         now = time.strftime('%Y-%m-%d %H:%M:%S')
         git_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
@@ -112,6 +122,7 @@ def standard_analysis_products(dirname, **kwargs):
         summary_text += '\n'
         summary_text += f'Report generated {now}; cmost-analysis git hash {git_hash} \n\n'
         if 'graycode' in kwargs: summary_text += f'Gray decoding applied \n\n'
+        if 'subframe' in kwargs: summary_text += f'Results for subframe (x1,x2,y1,y2): {subframe} \n\n'
         
         summary_text += 'Contents:\n'
         if singleframe_present: summary_text += '- Single readout frames\n'
@@ -148,25 +159,61 @@ def standard_analysis_products(dirname, **kwargs):
         # Get bias frames
         # We expect one bias file with 100 frames per gain mode: high, low, HDR
         if bias_present:
-            # Loop through the gain modes and load each bias frame individually
+            # Loop through the gain modes and load each bias frame individually using subframes
             # These files are *very* large
             med_bias_frames, noise_map, n_frame = {}, {}, {}
             for gain in ['hdr','high','low']:
-                #bias_frames = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias', **kwargs)
-                bifr = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias_{gain}', **kwargs)[0]
+                if 'subframe' in kwargs:
+                    # If a subframe is already defined, perform this on the subframe
+                    bifr = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias_{gain}', **kwargs)[0]
 
-                # For each gain mode, print a page of plots
-                if gain == 'hdr':
-                    med_bias_frames['high (dual-gain)'] = np.nanmedian(bifr.cds_frames[:,0],axis=0)
-                    med_bias_frames['low (dual-gain)'] = np.nanmedian(bifr.cds_frames[:,1],axis=0)
-                    noise_map['high (dual-gain)'] = np.nanstd(bifr.cds_frames[:,0],axis=0)
-                    noise_map['low (dual-gain)'] = np.nanstd(bifr.cds_frames[:,1],axis=0)
-                    n_frame['high (dual-gain)'], n_frame['low (dual-gain)'] = len(bifr.cds_frames), len(bifr.cds_frames)
+                    # Build the median bias and noise frames
+                    if gain == 'hdr':
+                        med_bias_frames['high (dual-gain)'] = np.nanmedian(bifr.cds_frames[:,0],axis=0)
+                        med_bias_frames['low (dual-gain)'] = np.nanmedian(bifr.cds_frames[:,1],axis=0)
+                        noise_map['high (dual-gain)'] = np.nanstd(bifr.cds_frames[:,0],axis=0)
+                        noise_map['low (dual-gain)'] = np.nanstd(bifr.cds_frames[:,1],axis=0)
+                        n_frame['high (dual-gain)'], n_frame['low (dual-gain)'] = len(bifr.cds_frames), len(bifr.cds_frames)
+                    else:
+                        med_bias_frames[gain] = np.nanmedian(bifr.cds_frames,axis=0)
+                        noise_map[gain] = np.nanstd(bifr.cds_frames,axis=0)
+                        n_frame[gain] = len(bifr.cds_frames)
                 else:
-                    med_bias_frames[gain] = np.nanmedian(bifr.cds_frames,axis=0)
-                    noise_map[gain] = np.nanstd(bifr.cds_frames,axis=0)
-                    n_frame[gain] = len(bifr.cds_frames)
-            
+                    # If doing this for the whole detector, use subframe functionality
+                    # to do this channel-by-channel to save time and memory
+                    if gain == 'hdr':
+                        med_bias_frames['high (dual-gain)'] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
+                        med_bias_frames['low (dual-gain)'] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
+                        noise_map['high (dual-gain)'] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
+                        noise_map['low (dual-gain)'] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
+                        for i in range(n_channels):
+                            chsf = (i*cw,(i+1)*cw-1,0,exp.dev_size[1]-1) # Define subframe for this channel
+                            bifr = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias_{gain}', subframe=chsf, **kwargs)[0]
+                            
+                            # Build the median bias and noise frames
+                            med_bias_frames['high (dual-gain)'][:,i*cw:(i+1)*cw] = np.nanmedian(bifr.cds_frames[:,0],axis=0)
+                            med_bias_frames['low (dual-gain)'][:,i*cw:(i+1)*cw] = np.nanmedian(bifr.cds_frames[:,1],axis=0)
+                            noise_map['high (dual-gain)'][:,i*cw:(i+1)*cw] = np.nanstd(bifr.cds_frames[:,0],axis=0)
+                            noise_map['low (dual-gain)'][:,i*cw:(i+1)*cw] = np.nanstd(bifr.cds_frames[:,1],axis=0)
+                        
+                        # Store number of frames used
+                        n_frame['high (dual-gain)'] = len(bifr.cds_frames)
+                        n_frame['low (dual-gain)'] = len(bifr.cds_frames)
+                    else:
+                        med_bias_frames[gain] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
+                        noise_map[gain] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
+                        for i in range(n_channels):
+                            chsf = (i*cw,(i+1)*cw-1,0,exp.dev_size[1]-1) # Define subframe for this channel
+                            bifr = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias_{gain}', subframe=chsf, **kwargs)[0]
+                            
+                            # Build the median bias and noise frames
+                            med_bias_frames[gain][:,i*cw:(i+1)*cw] = np.nanmedian(bifr.cds_frames,axis=0)
+                            noise_map[gain][:,i*cw:(i+1)*cw] = np.nanstd(bifr.cds_frames,axis=0)
+                        
+                        # Store number of frames used
+                        n_frame[gain] = len(bifr.cds_frames)
+
+            # Now create bias and noise map summary pages
             noise_map_e = {}
             for g in med_bias_frames:
                 med_bias = med_bias_frames[g] * nom_gain[g]
@@ -220,7 +267,8 @@ def standard_analysis_products(dirname, **kwargs):
             plt.axvline(3,ls='--',color='grey',label='3e- Requirement')
             plt.xlabel('Read Noise (e-)')
             ax1.set_ylabel('Fraction of Pixels')
-            ax1.set_ylim(5e-8,1)
+            min_y = 1 / (noise_map_e[g].size*2)
+            ax1.set_ylim(min_y,1)
             ax2.set_ylabel('Cumulative Fraction of Pixels')
             ax2.set_ylim(0,1)
             ax1.loglog()
@@ -284,21 +332,27 @@ def standard_analysis_products(dirname, **kwargs):
                 # Dark current 'measurement' is the 99% percentile
                 dark_current[g] = np.percentile(frame,99)
                 
+                if 'subframe' not in kwargs:
+                    # Boxcar smooth for plotting and histogram, if not looking at a subframe
+                    smoothed_dark = convolve(frame, Box2DKernel(5))
+                    smoothed_txt = ', boxcar-smoothed with width=5'
+                    plot_dark = smoothed_dark
+                else:
+                    smoothed_txt = ''
+                    plot_dark = frame
+                
                 summary_text = f'Frame: {g} long dark{sub_note} (nominal gain {nom_gain[g]} e-/ADU)\n'
-                summary_text += f'Exposure time {exp_time} s, boxcar-smoothed with width=5\n'
+                summary_text += f'Exposure time {exp_time} s{smoothed_txt}\n'
                 summary_text += f'Min median pixel value: {dmin:.4f} e-/s; max median pixel value: {dmax:.4f} e-/s \n'
                 summary_text += f'Median pixel value: {dmedian:.4f} e-/s; mean pixel value: {dmean:.4f} e-/s\n'
                 if (g == 'high') | (g == 'high (dual-gain)'): summary_text += f'Percentage above {bad_thresh} e-/s: {percent_bad:.2f} %; 99% percentile: {dark_current[g]:.4f} e-/s\n'
                 
-                # Boxcar smooth for plotting and histogram
-                smoothed_dark = convolve(frame, Box2DKernel(5))
-                
                 # Create a standard histogram page and save it to the pdf
                 prec = nom_gain[g] * 0.0002
                 if (g == 'high') | (g == 'high (dual-gain)'):
-                    hist_page(pdf, smoothed_dark, f'Long darks - {g} frame', summary_text, unit='e-/s', precision=prec, contours=[bad_thresh], vlines=[bad_thresh])
+                    hist_page(pdf, plot_dark, f'Long darks - {g} frame', summary_text, unit='e-/s', precision=prec, contours=[bad_thresh], vlines=[bad_thresh])
                 else:
-                    hist_page(pdf, smoothed_dark, f'Long darks - {g} frame', summary_text, unit='e-/s', precision=prec)
+                    hist_page(pdf, plot_dark, f'Long darks - {g} frame', summary_text, unit='e-/s', precision=prec)
 
         # Standard operating darks
         # Get darks
@@ -371,7 +425,8 @@ def standard_analysis_products(dirname, **kwargs):
                     summary_text += f'Median pixel value: {mmedian:.2f} e-/s; mean pixel value: {mmean:.2f} e-/s'
                     
                     # Create a standard histogram page and save it to the pdf
-                    hist_page(pdf, med_dark, f'Dark frames - {mode} mode - {names[j]} frame', summary_text, precision=precisions[j])
+                    hist_page(pdf, med_dark, f'Dark frames - {mode} mode - {names[j]} frame',
+                              summary_text, precision=precisions[j], unit='e-/s')
                 
                 # Also make a page of mean values over time
                 fig = plt.figure(figsize=[8.5,11],dpi=250)
@@ -383,13 +438,26 @@ def standard_analysis_products(dirname, **kwargs):
                 ax4 = plt.subplot2grid((4,1), (3,0))
                 
                 # Mean short-frame dark value over time (whole frame + every column)
-                sl_col_mean, sh_col_mean,ll_col_mean, lh_col_mean = [], [], [], []
-                n_cols = exp.dev_size[0]//256
-                for i in range(n_cols):
-                    sl_col_mean.append(np.mean(short_low[:,:,i*256:(i+1)*256],axis=(1,2)) * nom_gain['low (dual-gain)'])
-                    sh_col_mean.append(np.mean(short_high[:,:,i*256:(i+1)*256],axis=(1,2)) * nom_gain['high (dual-gain)'])
-                    ll_col_mean.append(np.mean(long_low[:,:,i*256:(i+1)*256],axis=(1,2)) * nom_gain['low (dual-gain)'])
-                    lh_col_mean.append(np.mean(long_high[:,:,i*256:(i+1)*256],axis=(1,2)) * nom_gain['high (dual-gain)'])
+                sl_mean = np.mean(short_low, axis=(1,2)) * nom_gain['low (dual-gain)']
+                sl_std = np.std(short_low, axis=(1,2)) * nom_gain['low (dual-gain)']
+                sh_mean = np.mean(short_high, axis=(1,2)) * nom_gain['high (dual-gain)']
+                sh_std = np.std(short_high, axis=(1,2)) * nom_gain['high (dual-gain)']
+                ll_mean = np.mean(long_low, axis=(1,2)) * nom_gain['low (dual-gain)']
+                ll_std = np.std(long_low, axis=(1,2)) * nom_gain['low (dual-gain)']
+                lh_mean = np.mean(long_high, axis=(1,2)) * nom_gain['high (dual-gain)']
+                lh_std = np.std(long_high, axis=(1,2)) * nom_gain['high (dual-gain)']
+                
+                if 'subframe' not in kwargs:
+                    # Also show a column-by-column breakdown if not looking at a subframe
+                    sl_col_mean, sh_col_mean, ll_col_mean, lh_col_mean = [], [], [], []
+                    for i in range(n_channels):
+                        sl_col_mean.append(np.mean(short_low[:,:,i*cw:(i+1)*cw],axis=(1,2)) * nom_gain['low (dual-gain)'])
+                        sh_col_mean.append(np.mean(short_high[:,:,i*cw:(i+1)*cw],axis=(1,2)) * nom_gain['high (dual-gain)'])
+                        ll_col_mean.append(np.mean(long_low[:,:,i*cw:(i+1)*cw],axis=(1,2)) * nom_gain['low (dual-gain)'])
+                        lh_col_mean.append(np.mean(long_high[:,:,i*cw:(i+1)*cw],axis=(1,2)) * nom_gain['high (dual-gain)'])
+                    frame_label = 'Whole detector'
+                else:
+                    frame_label = f'Subframe: {kwargs["subframe"]}'
                 
                 # Convert observation times to seconds
                 s_starts = [(s_starts[-1] - s).total_seconds() for s in s_starts]
@@ -397,28 +465,36 @@ def standard_analysis_products(dirname, **kwargs):
 
                 plt.sca(ax1)
                 plt.title(f'{names[0]}')
-                plt.plot(s_starts,np.mean(short_low,axis=(1,2)) * nom_gain['low (dual-gain)'],'x-',color='k',label='Whole chip')
-                for j in range(n_cols): plt.plot(s_starts,sl_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
+                plt.plot(s_starts,sl_mean,'x-',color='k',label=frame_label)
+                plt.fill_between(s_starts,sl_mean-sl_std,sl_mean+sl_std,color='k',alpha=0.1, label='St. Dev.')
+                if 'subframe' not in kwargs:
+                    for j in range(n_channels): p = plt.plot(s_starts,sl_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
                 plt.ylabel('e-')
                 plt.legend(fontsize=10,ncol=6,loc=9)
                 
                 plt.sca(ax2)
                 plt.title(f'{names[1]}')
-                plt.plot(s_starts,np.mean(short_high,axis=(1,2)) * nom_gain['high (dual-gain)'],'x-',color='k',label='Whole chip')
-                for j in range(n_cols): plt.plot(s_starts,sh_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
+                plt.plot(s_starts,sh_mean,'x-',color='k',label=frame_label)
+                plt.fill_between(s_starts,sh_mean-sh_std,sh_mean+sh_std,color='k',alpha=0.1, label='St. Dev.')
+                if 'subframe' not in kwargs:
+                    for j in range(n_channels): plt.plot(s_starts,sh_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
                 plt.ylabel('e-')
                 
                 # Mean long-frame dark value over time
                 plt.sca(ax3)
                 plt.title(f'{names[2]}')
-                plt.plot(l_starts,np.mean(long_low,axis=(1,2)) * nom_gain['low (dual-gain)'],'x-',color='k',label='Whole chip')
-                for j in range(n_cols): plt.plot(l_starts,ll_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
+                plt.plot(l_starts,ll_mean,'x-',color='k',label=frame_label)
+                plt.fill_between(s_starts,ll_mean-ll_std,ll_mean+ll_std,color='k',alpha=0.1, label='St. Dev.')
+                if 'subframe' not in kwargs:
+                    for j in range(n_channels): plt.plot(l_starts,ll_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
                 plt.ylabel('e-')
                 
                 plt.sca(ax4)
                 plt.title(f'{names[3]}')
-                plt.plot(l_starts,np.mean(long_high,axis=(1,2)) * nom_gain['high (dual-gain)'],'x-',color='k',label='Whole chip')
-                for j in range(n_cols): plt.plot(l_starts,lh_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
+                plt.plot(l_starts,lh_mean,'x-',color='k',label=frame_label)
+                plt.fill_between(s_starts,lh_mean-lh_std,lh_mean+lh_std,color='k',alpha=0.1, label='St. Dev.')
+                if 'subframe' not in kwargs:
+                    for j in range(n_channels): plt.plot(l_starts,lh_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
                 plt.xlabel('Time (s)')
                 plt.ylabel('e-')
                 
@@ -444,7 +520,10 @@ def standard_analysis_products(dirname, **kwargs):
                     flat_frames = load_by_filepath(file_table['FILEPATH'][gain_flats], **kwargs)
                     exptime = file_table['EXPTIME'][gain_flats]
                     if gain in read_time: exptime = exptime + read_time[gain]
-                    led = [f.split('_')[4] for f in flat_files] # get LED voltage from filename
+                    if (file_table['LED'][gain_flats] > -1).any():
+                        led = file_table['LED'][gain_flats] # get LED voltage from FITS header
+                    else:
+                        led = [f.split('_')[4] for f in flat_files] # get LED voltage from filename
                     
                     led_vals = np.unique(led)
                     max_exp, max_i = max(exptime), np.argmax(exptime)
@@ -454,15 +533,26 @@ def standard_analysis_products(dirname, **kwargs):
                     bad_frac = np.sum((bad_pixel_map > 0)) / bad_pixel_map.size
                     if bad_frac < 0.5: domask = True
                     else: domask = False
+                    
+                    # Define how to split up the detector area into multiple chunks to get a number of medians
+                    if 'subframe' in kwargs:
+                        # If subframe defined, loop through ~roughly 256x256 chunks of the subframe
+                        x_parts = int(np.maximum(1, np.round((subframe[1]-subframe[0]+1) / cw)))
+                        y_parts = int(np.maximum(1, np.round((subframe[3]-subframe[2]+1) / cw)))
+                        x_size, y_size = (subframe[1]-subframe[0]+1) // x_parts, (subframe[3]-subframe[2]+1) // y_parts
+                    else:
+                        # If no subframe defined, loop through 256x256 chunks of the detector
+                        x_parts, y_parts = int(exp.dev_size[0] // cw), int(exp.dev_size[1] // cw)
+                        x_size, y_size = cw, cw
+                    n_subframes = x_parts * y_parts
 
                     if gain == 'hdr':
-                        # Loop through 256x256 chunks of the detector to get multiple subframe medians
                         medians, variance = np.zeros((1,2)), np.zeros((1,2))
                         all_exp_times, all_voltage = np.zeros(1), np.zeros(1)
-                        n_subframes = (exp.dev_size[0] // 256) * (exp.dev_size[1] // 256)
-                        for i in range(exp.dev_size[0] // 256):
-                            for j in range(exp.dev_size[1] // 256):
-                                x1, x2, y1, y2 = 256*i, 256*(i+1), 256*j, 256*(j+1)
+                        
+                        for i in range(x_parts):
+                            for j in range(y_parts):
+                                x1, x2, y1, y2 = x_size*i, x_size*(i+1), y_size*j, y_size*(j+1)
                                 if domask:
                                     mask = bad_pixel_map[y1:y2,x1:x2]
                                     medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
@@ -496,10 +586,10 @@ def standard_analysis_products(dirname, **kwargs):
                         # Loop through 256x256 chunks of the detector to get multiple subframe medians
                         medians, variance = np.zeros(1), np.zeros(1)
                         all_exp_times, all_voltage = np.zeros(1), np.zeros(1)
-                        n_subframes = (exp.dev_size[0] // 256) * (exp.dev_size[1] // 256)
-                        for i in range(exp.dev_size[0] // 256):
-                            for j in range(exp.dev_size[1] // 256):
-                                x1, x2, y1, y2 = 256*i, 256*(i+1), 256*j, 256*(j+1)
+                        
+                        for i in range(x_parts):
+                            for j in range(y_parts):
+                                x1, x2, y1, y2 = x_size*i, x_size*(i+1), y_size*j, y_size*(j+1)
                                 if domask:
                                     mask = bad_pixel_map[y1:y2,x1:x2]
                                     medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
@@ -524,7 +614,7 @@ def standard_analysis_products(dirname, **kwargs):
                             mid_flats[gain] = flat_frames[mid_exp_i].cds_frames[0] - med_bias_frames[gain]
                         else:
                             mid_flats[gain] = flat_frames[mid_exp_i].cds_frames[0]
-                    
+            
             # Mid-range flats
             for g in mid_flats:
                 flat = mid_flats[g] * nom_gain[g]
@@ -569,6 +659,7 @@ def standard_analysis_products(dirname, **kwargs):
                 plt.subplots_adjust(hspace=0)
                 
                 led_vals = np.unique(voltage[g])
+                alpha = np.maximum(1/(2*n_subframes), 0.05)
                 for i, vol in enumerate(led_vals):
                     plt.sca(ax1)
                     means = np.array([])
@@ -581,7 +672,7 @@ def standard_analysis_products(dirname, **kwargs):
                         means = np.append(means, np.mean(med_sig[g][this_voltage_time]))
                     
                     # Plot signal and mean signal
-                    plt.scatter(exp_times[g][this_voltage], med_sig[g][this_voltage], marker='x', label=f'{g}', color=gain_color[g], alpha=0.05)
+                    plt.scatter(exp_times[g][this_voltage], med_sig[g][this_voltage], marker='x', label=f'{g}', color=gain_color[g], alpha=alpha)
                     plt.scatter(exposure_times, means, marker='x', label=f'{g}', color=gain_color[g])
                     
                     # Fit line to the set of means above 10 and less than the rough saturation level
@@ -597,7 +688,7 @@ def standard_analysis_products(dirname, **kwargs):
                         plt.plot([0.5,30000],[0,0],ls='--',color='gray')
                         resid = (med_sig[g][this_voltage] - model_fit(exp_times[g][this_voltage])) / model_fit(exp_times[g][this_voltage]) * 100
                         resid_means = (means - model_fit(exposure_times)) / model_fit(exposure_times) * 100
-                        plt.scatter(med_sig[g][this_voltage], resid, marker='x', label=f'{g}', color=gain_color[g], alpha=0.05)
+                        plt.scatter(med_sig[g][this_voltage], resid, marker='x', label=f'{g}', color=gain_color[g], alpha=alpha)
                         plt.scatter(means, resid_means, marker='x', label=f'{g}', color=gain_color[g])
                         plt.text(0.02,0.1,f'{vol} V',transform=vol_subplots[i].transAxes)
                         plt.semilogx()
@@ -666,8 +757,8 @@ def standard_analysis_products(dirname, **kwargs):
                     model_fit, mask = fit_or(model, med_sig[g][for_fitting], corrected_v[for_fitting], maxiter=100)
                     
                     # Plot points used for fitting and points filtered out - mask filters out
-                    plt.scatter(med_sig[g][for_fitting][mask], var[g][for_fitting][mask], marker='x', color=gain_color[g], alpha=0.05)
-                    plt.scatter(med_sig[g][~for_fitting], var[g][~for_fitting], marker='x', color=gain_color[g], alpha=0.05)
+                    plt.scatter(med_sig[g][for_fitting][mask], var[g][for_fitting][mask], marker='x', color=gain_color[g], alpha=alpha)
+                    plt.scatter(med_sig[g][~for_fitting], var[g][~for_fitting], marker='x', color=gain_color[g], alpha=alpha)
                     plt.scatter(med_sig[g][for_fitting][~mask], var[g][for_fitting][~mask], marker='x', color=gain_color[g])
 
                     #K_ADC(e−/DN) is determined from the slope of the shot noise curve (i.e. powerlaw amplitude)
@@ -823,19 +914,26 @@ def hist_page(pdf, data, title, summary_text, unit='e-', precision=1, contours=F
 if __name__ == '__main__':
     '''
     Usage:
-    python [-g] cmost_analysis.py DIRECTORY
+    python [-g] [-s x1,x2,y1,y2] cmost_analysis.py DIRECTORY
     '''
-    opts = [opt for opt in sys.argv[1:] if opt.startswith("-")]
-    args = [arg for arg in sys.argv[1:] if not arg.startswith("-")]
+    import argparse
     
-    if len(args) < 1:
-        dirname = input('Analysis directory: ')
-    else:
-        dirname = args[0]
+    def int_tuple(arg):
+        return tuple(map(int, arg.split(',')))
     
-    kwargs = {}
-    if '-g' in opts:
-        kwargs['graycode'] = True
+    parser = argparse.ArgumentParser()
+    parser.add_argument("directory", type=str, help="path to data directory")
+    parser.add_argument("-g", help="apply graycode descrambling", action="store_true")
+    parser.add_argument("-s", "--subframe", type=int_tuple, help="subframe definition in form x1,x2,y1,y2")
+    args = parser.parse_args()
 
-    standard_analysis_products(dirname,**kwargs)
+    kwargs = {}
+    if args.g == True:
+        kwargs['graycode'] = True
+    if args.subframe is not None:
+        subframe = args.subframe
+        assert len(subframe) == 4, 'Invalid subframe (must be in form x1,x2,y1,y2)'
+        kwargs['subframe'] = subframe
+
+    standard_analysis_products(args.directory,**kwargs)
 

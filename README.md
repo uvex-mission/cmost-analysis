@@ -30,15 +30,26 @@ A set of standardized analysis exposures can be taken using standard\_analysis\_
 
 To generate a report for a standard set of analysis exposures, run the following in a Python 3 environment:
 
-``` python cmost_analysis.py -g [path to data directory] ```
+``` python cmost_analysis.py [-g] [path to data directory] ```
 
 This will generate a PDF report in the linked data directory. Warning: takes a while to generate, particularly for a large detector.
+
+In order to perform the standard analysis on a user-defined subframe, run the following: 
+
+``` python cmost_analysis.py [-g] -s x1,x2,y1,y2 [path to data directory] ```
+
+Where x1,x2,y1,y2 are the inclusive pixel numbers bounding the subframe, starting from 0. For example, to define a subframe containing the first 256 pixels in a row and the second hundred in a column, use: 0,255,100,199
 
 All functions in cmost\_camera.py MUST be run using Python 2, for compatibility with PyArchon. Utility functions setup\_camera() and set\_gain() can be used to create custom data-taking scripts, and exp\_UVEX\_NUV\_dwell() is our current best representation of a standard NUV guiding dwell.
 
 
 
-Major standard analysis report update
+01/2025: Subframe update
+
+- Added subframe functionality
+- Used subframe functionality to improve memory usage for bias frame analysis
+
+2024: Major standard analysis report update
 
 Includes:
 - Better parsing of directory contents

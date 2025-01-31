@@ -21,6 +21,12 @@ class Exposure():
         Defaults to []
         Specific header keys to load in addition to the defaults
         
+    subframe : tuple
+        Defaults to None
+        A tuple in the form (x1,x2,y1,y2) defining a subframe to be loaded
+        Only the necessary columns are loaded for raw frames
+        And then exact subframe is applied to the CDS frame
+        
     cleanup : bool
         Defaults to True
         If True, delete raw frames after CDS to save on memory
@@ -81,6 +87,12 @@ class Exposure():
     
     tpixel_hold : int
         TPixel Hold
+        
+    col_width : int
+        Width of a column in pixels
+        
+    subframe : tuple
+        User-defined subframe to load
     
     custom_key_values: dict
         Dictionary of custom keys and associated values
@@ -97,18 +109,18 @@ class Exposure():
         A Numpy array of 2-d frames, containing CDS frames that have been binned up by a factor supplied
         by the user (default 4)
     '''
-    def __init__(self, filepath='', custom_keys=[], cleanup=True, graycode=False):
+    def __init__(self, filepath='', custom_keys=[], subframe=None, cleanup=True, graycode=False):
         self.filepath = filepath
     
         if self.filepath != '':
             # Read image at provided filepath
-            self.read_fits(self.filepath, custom_keys, graycode)
+            self.read_fits(self.filepath, custom_keys, graycode, subframe)
         
         # Once everything is loaded delete what's no longer needed
         if cleanup:
             self.cleanup_frames()
 
-    def read_fits(self, filepath, custom_keys, graycode):
+    def read_fits(self, filepath, custom_keys, graycode, subframe):
         '''
         Read FITS image and populate attributes
         
@@ -145,6 +157,9 @@ class Exposure():
             self.gain = cmost_hdr.get('GAIN','')
         self.firmware = cmost_hdr.get('FIRMWARE','')
         self.tpixel_hold = cmost_hdr.get('TPIXEL_H',-1)
+        
+        # The column width is always 256 pixels
+        self.col_width = 256 # Column width in pixels
     
         # Any other non-default header keys to search for as passed by user
         self.custom_key_values = {}
@@ -152,7 +167,7 @@ class Exposure():
             self.custom_key_values[k] = cmost_hdr.get(k,None)
     
         if len(cmost_file) > 1:
-            # Create an array of useable frames
+            # Define useable frames
             frame_shape = cmost_file[1].data.shape
             # This file will have at least one unusable frame
             if self.readout_mode in ['DEFAULT','ROLLINGRESET','ROLLINGRESET_HDR']:
@@ -173,50 +188,74 @@ class Exposure():
     
         useable_frames = len(cmost_file) - ignore_ext
         
-        self.raw_frames = np.zeros([useable_frames,frame_shape[0],frame_shape[1]])
-        for i in range(useable_frames):
-            # Frame data is in uint16 or uint32 by default, open in uint32
-            self.raw_frames[i] = np.array(cmost_file[i+ignore_ext].data, dtype=np.uint32)
-            del cmost_file[i+ignore_ext].data # Remove this extension from memory
+        # Define the device size
+        if self.readout_mode in ['DEFAULT','ROLLINGRESET','PSEUDOGLOBALRESET','GUIDING']:
+            cols_per_channel = 2
+            self.dev_size = (frame_shape[1]//cols_per_channel, frame_shape[0]) # Width, height
+        elif self.readout_mode in ['TRUEGLOBALRESET']:
+            cols_per_channel = 1
+            self.dev_size = (frame_shape[1], frame_shape[0]//2) # Width, height
+        elif self.readout_mode in ['ROLLINGRESET_HDR']:
+            cols_per_channel = 4
+            self.dev_size = (frame_shape[1]//cols_per_channel, frame_shape[0]) # Width, height
+        else:
+            # If no readout mode is specified we'll just return raw data
+            cols_per_channel = 1
+            self.dev_size = (frame_shape[1], frame_shape[0]) # Width, height
+        
+        # Read in the raw data
+        self.subframe = subframe
+        if self.subframe:
+            # Validate the subframe
+            x1,x2,y1,y2 = self.subframe
+            assert ((x1 >= 0) & (x2 < self.dev_size[0]) & (x2 > x1) &
+                    (y1 >= 0) & (y2 < self.dev_size[1]) & (y2 > y1)), f'Invalid subframe {subframe} (device size is {self.dev_size})'
+        
+            # Define the columns to load
+            # Since CDS subtraction and graycode descrambling is done in integer-column chunks
+            raw_col_width = self.col_width * cols_per_channel
+            start_col, end_col = (x1 // self.col_width)*raw_col_width, ((x2 // self.col_width) + 1)*raw_col_width
+            
+            self.raw_frames = np.zeros([useable_frames,self.dev_size[1],end_col-start_col])
+            for i in range(useable_frames):
+                # Frame data is in uint16 or uint32 by default, open in uint32
+                self.raw_frames[i] = np.array(cmost_file[i+ignore_ext].section[:,start_col:end_col], dtype=np.uint32)
+        else:
+            self.raw_frames = np.zeros([useable_frames,frame_shape[0],frame_shape[1]])
+            for i in range(useable_frames):
+                # Frame data is in uint16 or uint32 by default, open in uint32
+                self.raw_frames[i] = np.array(cmost_file[i+ignore_ext].data, dtype=np.uint32)
+                del cmost_file[i+ignore_ext].data # Remove this extension from memory
         
         # Perform CDS on the frames
-        self.perform_cds()
-        
-        # Perform gray code descrambling
-        if graycode:
-            self.descramble_gray_code()
+        self.perform_cds(graycode)
 
         cmost_file.close()
 
-    def perform_cds(self):
+    def perform_cds(self, graycode):
         '''
         Perform necessary CDS operation based on the readout mode on all useable frames
         '''
-        col_width = 256 # Column width in pixels
+        oldshape = self.raw_frames.shape
         if self.readout_mode in ['DEFAULT','ROLLINGRESET','PSEUDOGLOBALRESET','GUIDING']:
             # CDS columns are laid out side by side width-wise
-            oldshape = self.raw_frames.shape
-            AmpNb = oldshape[2]//(col_width*2) # Number of amplifiers
+            AmpNb = oldshape[2]//(self.col_width*2) # Number of amplifiers
             image = np.reshape(self.raw_frames,
-                            (oldshape[0], oldshape[1]*col_width, 2, AmpNb),
+                            (oldshape[0], oldshape[1]*self.col_width, 2, AmpNb),
                             order='F')
             cds_image = image[:,:,0,:] - image[:,:,1,:]
             self.cds_frames = np.reshape(cds_image,
                             (oldshape[0], oldshape[1], oldshape[2]//2),
                             order='F')
-            self.dev_size = (self.cds_frames.shape[2], self.cds_frames.shape[1]) # Width, height
         elif self.readout_mode in ['TRUEGLOBALRESET']:
             # CDS columns are laid out top and bottom
-            oldshape = self.raw_frames.shape
             AmpHt = oldshape[1]//2 # Amplifier height
             self.cds_frames = self.raw_frames[:,AmpHt:,:] - self.raw_frames[:,:AmpHt,:]
-            self.dev_size = (self.cds_frames.shape[2], self.cds_frames.shape[1]) # Width, height
         elif self.readout_mode in ['ROLLINGRESET_HDR']:
             # Four columns, order is 0: Reset Low, 1: Reset High, 2: Signal High, 3: Signal Low
-            oldshape = self.raw_frames.shape
-            AmpNb = oldshape[2]//(col_width*4) # Number of amplifiers
+            AmpNb = oldshape[2]//(self.col_width*4) # Number of amplifiers
             image = np.reshape(self.raw_frames,
-                            (oldshape[0], oldshape[1]*col_width, 4, AmpNb),
+                            (oldshape[0], oldshape[1]*self.col_width, 4, AmpNb),
                             order='F')
             cds_high = image[:,:,1,:] - image[:,:,2,:]
             cds_low = image[:,:,0,:] - image[:,:,3,:]
@@ -227,11 +266,25 @@ class Exposure():
                             oldshape[2]//4), order='F')
             # 2-d array of 2-d frames, with shape len(raw_frames) x 2
             self.cds_frames = np.stack((cds_high_frames, cds_low_frames), axis=1)
-            self.dev_size = (self.cds_frames.shape[3], self.cds_frames.shape[2]) # Width, height
         else:
             # Just return the raw image
             self.cds_frames = self.raw_frames
-            self.dev_size = (self.cds_frames.shape[2], self.cds_frames.shape[1]) # Width, height
+            
+        # Perform gray code descrambling
+        if graycode:
+            self.descramble_gray_code()
+        
+        # Cut out exact required subframe
+        if self.subframe:
+            x1,x2,y1,y2 = self.subframe
+            # Which col did we start with in the x direction?
+            start_col = x1 // self.col_width
+            x1, x2 = x1 - start_col*self.col_width, x2 - start_col*self.col_width
+            
+            if self.readout_mode in ['ROLLINGRESET_HDR']:
+                self.cds_frames = self.cds_frames[:,:,y1:y2+1,x1:x2+1]
+            else:
+                self.cds_frames = self.cds_frames[:,y1:y2+1,x1:x2+1]
     
     def descramble_gray_code(self):
         '''
@@ -242,22 +295,21 @@ class Exposure():
             n ^= (n>>1)
             return n
         
-        col_width = 256
         orig_shape = self.cds_frames.shape
         
-        binarycode = range(col_width)
+        binarycode = range(self.col_width)
         graycode = np.array([binary_to_gray(i) for i in binarycode])
         t = np.argsort(graycode, axis=-1, kind=None, order=None)
         
         # Sort CDS frames into correct order
         if len(orig_shape) == 3: # Single-gain mode frame
-            AmpNb = orig_shape[2]//col_width # Number of amplifiers
-            image = np.reshape(self.cds_frames,(orig_shape[0],orig_shape[1],col_width,AmpNb), order='F')
+            AmpNb = orig_shape[2]//self.col_width # Number of amplifiers
+            image = np.reshape(self.cds_frames,(orig_shape[0],orig_shape[1],self.col_width,AmpNb), order='F')
             image = image[:,:,t,:]
             self.cds_frames = image.reshape(orig_shape, order='F')
         elif len(orig_shape) == 4: # Dual-gain mode frame
-            AmpNb = orig_shape[3]//col_width
-            image = np.reshape(self.cds_frames,(orig_shape[0],orig_shape[1],orig_shape[2],col_width,AmpNb), order='F')
+            AmpNb = orig_shape[3]//self.col_width
+            image = np.reshape(self.cds_frames,(orig_shape[0],orig_shape[1],orig_shape[2],self.col_width,AmpNb), order='F')
             image = image[:,:,:,t,:]
             self.cds_frames = image.reshape(orig_shape, order='F')
 
