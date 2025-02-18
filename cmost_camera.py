@@ -29,7 +29,7 @@ def dwelltest(camid,detid):
     cam.close()
 
 
-def standard_analysis_exposures(camid, detid, ledw='None', singleframe=True, bias=True, longdark=True, opdark=True, flat=True, singleflat=False, flatv=-1):
+def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', singleframe=True, bias=True, longdark=True, opdark=True, flat=True, singleflat=False, flatv=-1):
     '''
     Function to take all exposures required for standard analysis
     to be performed on all chips. By default takes all exposure sets,
@@ -50,8 +50,6 @@ def standard_analysis_exposures(camid, detid, ledw='None', singleframe=True, bia
     start = time.time()
     
     # Dump .acf and notes file into the output directory
-    # TODO: find a way to query camerad for config file rather than hardcoding it
-    config_filepath = '/home/user/CMOST/cmost1k1k.cfg'
     notes_filepath = dump_info(config_filepath)
 
     # Start up the camera
@@ -492,35 +490,39 @@ if __name__ == '__main__':
     if len(sys.argv) < 3:
         print('''
 Usage:
-    python cmost_camera.py standard CAMID DETID LED
-    python cmost_camera.py longdark CAMID DETID
+    python cmost_camera.py standard CAMID DETID CONFIG LED
+    python cmost_camera.py longdark CAMID DETID CONFIG
             ''')
         exit()
 
     # Pick the exposure set to execute
     if sys.argv[1] == 'standard':
-        print('Taking standard exposure set (~20 hours)')
+        print('Taking standard exposure set (~18 hours)')
         if len(sys.argv) < 3: camid = raw_input('Camera ID (cmost or cmostjpl): ')
         else: camid = sys.argv[2]
         if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
         else: detid = sys.argv[3]
-        if len(sys.argv) < 5: ledw = raw_input('LED wavelength (nm): ')
-        else: ledw = sys.argv[4]
+        if len(sys.argv) < 5: config_file = raw_input('Path to config file: ')
+        else: config_file = sys.argv[4]
+        if len(sys.argv) < 6: ledw = raw_input('LED wavelength (nm): ')
+        else: ledw = sys.argv[5]
         
         # Check LED wavelength is one we expect
         if ledw not in ['255', '260', '285', '310', '340', '372', '800', 'None']:
             print('LED wavelength options: 255, 260, 285, 310, 340, 372, 800, None. If None, no flats will be taken. Make sure the correct LED is selected on the camera before running this script!')
             exit()
         
-        standard_analysis_exposures(camid,detid,ledw=ledw)
+        standard_analysis_exposures(camid,detid,config_file,ledw=ledw)
     elif sys.argv[1] == 'longdark':
         print('Taking long darks (~9 hours)')
         if len(sys.argv) < 3: camid = raw_input('Camera ID (cmost or cmostjpl): ')
         else: camid = sys.argv[2]
         if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
         else: detid = sys.argv[3]
+        if len(sys.argv) < 5: config_file = raw_input('Path to config file: ')
+        else: config_file = sys.argv[4]
 
-        standard_analysis_exposures(camid,detid,singleframe=False,bias=False,opdark=False,flat=False)
+        standard_analysis_exposures(camid,detid,config_file,singleframe=False,bias=False,opdark=False,flat=False)
     else:
         print('Unknown exposure set. Options: standard, longdark')
         exit()
