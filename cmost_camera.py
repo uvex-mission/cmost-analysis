@@ -350,7 +350,7 @@ def dump_info(config_filepath):
         if line.startswith("DEFAULT_FIRMWARE"):
             acf_file = line.split('=')[1][:-1]
         if line.startswith("IMDIR"):
-            output_dir = line.split('=')[1][:-1]+time.strftime('%Y%m%d', time.gmtime())
+            output_dir = line.split('=')[1][:-1]+'/'time.strftime('%Y%m%d', time.gmtime())
             
     # Check for output directory
     if not os.path.isdir(output_dir):
