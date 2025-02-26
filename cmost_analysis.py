@@ -19,6 +19,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
+from astropy.io import fits
 from astropy.stats import sigma_clip
 from astropy.modeling import fitting
 from astropy.modeling.models import PowerLaw1D
@@ -34,6 +35,12 @@ def standard_analysis_products(dirname, **kwargs):
     Load standard exposures from the given directory and output
     standard analysis reports
     '''
+    
+    #######################################################
+    # Prep section
+    # - Parses available files and gets general information
+    #######################################################
+    
     # Scan the FITS files in the data directory
     file_table = scan_headers(dirname,custom_keys=['LEDWAVE'])
     if not file_table:
@@ -78,28 +85,127 @@ def standard_analysis_products(dirname, **kwargs):
 
     # Final summary numbers to generate
     read_noise, det_gain, dark_current, well_depth, read_time = {}, {}, {}, {}, {}
+    read_noise_e, dark_current_e, well_depth_e = {}, {}, {}
     gain_modes = ['high (dual-gain)','low (dual-gain)','high','low']
-    # A nominal gain value for converting ADU to electrons (checked against PTC later)
+    # A nominal gain value for converting ADU to electrons in case PTC gives bad values
     nom_gain = {'high (dual-gain)': 1.2, 'low (dual-gain)': 8.5, 'high': 1.2, 'low': 8.5}
     nom_read_noise = {'high (dual-gain)': 1.75, 'low (dual-gain)': 1.18, 'high': 1.75, 'low': 1.18}
+    
+    # Initialize bad pixel map and create summary filename based on whether or not we're using a subframe
+    nowstring = time.strftime("%Y%m%d%H%M%S")
+    if 'subframe' in kwargs:
+        subframe = kwargs['subframe']
+        x, y = subframe[1]-subframe[0]+1, subframe[3]-subframe[2]+1
+        bad_pixel_map = np.zeros([x,y])
+        doc_name = f'{filedatestring}_{camera}_{detid}{subframe}_analysis_report_{nowstring}.pdf'
+    else:
+        bad_pixel_map = np.zeros([exp.dev_size[1],exp.dev_size[0]])
+        doc_name = f'{filedatestring}_{camera}_{detid}_analysis_report_{nowstring}.pdf'
+        
+    # Create a folder to hold output of analysis run inside the provided data directory
+    output_dirname = os.path.join(dirname,f'{nowstring}_output')
+    os.mkdir(output_dirname)
+    
+    ###################################################
+    # Data analysis section
+    # - Performs analysis tasks and writes result files
+    ###################################################
+    
+    # Get frame readout time from the single-frame exposures
+    if singleframe_present and notes_present:
+        for i, l in enumerate(notes_lines):
+            if l.startswith('Readout times:'):
+                # A single frame readout lasts for a reset frame readout and an actual frame readout
+                # So the actual time an exposure takes reading out is more-or-less half this amount
+                read_time['high'] = float(notes_lines[i+1].split()[1]) / 2
+                read_time['low'] = float(notes_lines[i+2].split()[1]) / 2
+                read_time['hdr'] = float(notes_lines[i+3].split()[1]) / 2
+    
+    # Get bias frames, noise maps, and read noise measurements
+    if bias_present:
+        # Loop through the gain modes and load each bias frame individually using subframes
+        # These files are *very* large
+        med_bias_frames, noise_map, n_frame = {}, {}, {}
+        for gain in ['hdr','high','low']:
+            if 'subframe' in kwargs:
+                # If a subframe is already defined, perform this on the subframe
+                bifr = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias_{gain}', **kwargs)[0]
+
+                # Build the median bias and noise frames
+                if gain == 'hdr':
+                    med_bias_frames['high (dual-gain)'] = np.nanmedian(bifr.cds_frames[:,0],axis=0)
+                    med_bias_frames['low (dual-gain)'] = np.nanmedian(bifr.cds_frames[:,1],axis=0)
+                    noise_map['high (dual-gain)'] = np.nanstd(bifr.cds_frames[:,0],axis=0)
+                    noise_map['low (dual-gain)'] = np.nanstd(bifr.cds_frames[:,1],axis=0)
+                    n_frame['high (dual-gain)'], n_frame['low (dual-gain)'] = len(bifr.cds_frames), len(bifr.cds_frames)
+                else:
+                    med_bias_frames[gain] = np.nanmedian(bifr.cds_frames,axis=0)
+                    noise_map[gain] = np.nanstd(bifr.cds_frames,axis=0)
+                    n_frame[gain] = len(bifr.cds_frames)
+            else:
+                # If doing this for the whole detector, use subframe functionality
+                # to do this channel-by-channel to save time and memory
+                if gain == 'hdr':
+                    med_bias_frames['high (dual-gain)'] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
+                    med_bias_frames['low (dual-gain)'] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
+                    noise_map['high (dual-gain)'] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
+                    noise_map['low (dual-gain)'] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
+                    for i in range(n_channels):
+                        chsf = (i*cw,(i+1)*cw-1,0,exp.dev_size[1]-1) # Define subframe for this channel
+                        bifr = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias_{gain}', subframe=chsf, **kwargs)[0]
+                        
+                        # Build the median bias and noise frames
+                        med_bias_frames['high (dual-gain)'][:,i*cw:(i+1)*cw] = np.nanmedian(bifr.cds_frames[:,0],axis=0)
+                        med_bias_frames['low (dual-gain)'][:,i*cw:(i+1)*cw] = np.nanmedian(bifr.cds_frames[:,1],axis=0)
+                        noise_map['high (dual-gain)'][:,i*cw:(i+1)*cw] = np.nanstd(bifr.cds_frames[:,0],axis=0)
+                        noise_map['low (dual-gain)'][:,i*cw:(i+1)*cw] = np.nanstd(bifr.cds_frames[:,1],axis=0)
+                    
+                    # Store number of frames used
+                    n_frame['high (dual-gain)'] = len(bifr.cds_frames)
+                    n_frame['low (dual-gain)'] = len(bifr.cds_frames)
+                else:
+                    med_bias_frames[gain] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
+                    noise_map[gain] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
+                    for i in range(n_channels):
+                        chsf = (i*cw,(i+1)*cw-1,0,exp.dev_size[1]-1) # Define subframe for this channel
+                        bifr = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias_{gain}', subframe=chsf, **kwargs)[0]
+                        
+                        # Build the median bias and noise frames
+                        med_bias_frames[gain][:,i*cw:(i+1)*cw] = np.nanmedian(bifr.cds_frames,axis=0)
+                        noise_map[gain][:,i*cw:(i+1)*cw] = np.nanstd(bifr.cds_frames,axis=0)
+                    
+                    # Store number of frames used
+                    n_frame[gain] = len(bifr.cds_frames)
+                    
+        # TODO: Store the median bias frames and add the frame stats to a table
+        # The below needs as an input: a set of frames in dictionary form, indexed by gain
+        # and a name for the file
+        # That's literally it! Make a function.
+        hdus = [fits.PrimaryHDU()]
+        for g in med_bias_frames:
+            imhdu = fits.ImageHDU(data=med_bias_frames[g], name=f'{g} bias frame')
+            imhdu.header['GAIN'] = g
+            hdus.append(imhdu)
+        hdulist = fits.HDUList(hdus=hdus)
+        hdulist.writeto(os.path.join(output_dirname,'bias_frames.fits'))
+        # Output: med_bias_frame for each gain, noise_map for each gain, n_frame (# of frames) for each gain
+        # Put them in output_dirname
+        
+    exit()
+    
+    
+    ###############################
+    # PDF report generation section
+    # - Produces PDF summary report
+    ###############################
     
     # Plot settings
     gain_color = {'high (dual-gain)': 'tab:blue', 'low (dual-gain)': 'tab:orange', 'high': 'tab:green', 'low': 'tab:red'}
     gain_line_color = {'high (dual-gain)': 'darkblue', 'low (dual-gain)': 'brown', 'high': 'darkgreen', 'low': 'darkred'}
     
-    # Bad pixel map
-    if 'subframe' in kwargs:
-        subframe = kwargs['subframe']
-        x, y = subframe[1]-subframe[0]+1, subframe[3]-subframe[2]+1
-        bad_pixel_map = np.zeros([x,y])
-        doc_name = f'{filedatestring}_{camera}_{detid}{subframe}_analysis_report_{time.strftime("%Y%m%d%H%M%S")}.pdf'
-    else:
-        bad_pixel_map = np.zeros([exp.dev_size[1],exp.dev_size[0]])
-        doc_name = f'{filedatestring}_{camera}_{detid}_analysis_report_{time.strftime("%Y%m%d%H%M%S")}.pdf'
-    
     # Initialize report document
     #doc_name = f'analysis_report_test.pdf'
-    with PdfPages(os.path.join(dirname,doc_name)) as pdf:
+    with PdfPages(os.path.join(output_dirname,doc_name)) as pdf:
     
         now = time.strftime('%Y-%m-%d %H:%M:%S')
         git_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
@@ -110,7 +216,7 @@ def standard_analysis_products(dirname, **kwargs):
         
         # Temperature
         if exp.temperature > 0: temp = f'{exp.temperature:2f} K (measured)'
-        else: temp = '140 K (assumed)'
+        else: temp = 'TEMPERATURE DATA MISSING (default is 140K)'
         
         # Device and test summary text
         summary_text = f'Cosmetic report for DeviceID: {detid}\n'
@@ -145,73 +251,13 @@ def standard_analysis_products(dirname, **kwargs):
         pdf.savefig()
         plt.close()
         
-        # Get frame readout time
-        if singleframe_present and notes_present:
-            for i, l in enumerate(notes_lines):
-                if l.startswith('Readout times:'):
-                    # A single frame readout lasts for a 'ghost' frame readout and an actual frame readout
-                    # So the actual time an exposure takes reading out is half this amount
-                    read_time['high'] = float(notes_lines[i+1].split()[1]) / 2
-                    read_time['low'] = float(notes_lines[i+2].split()[1]) / 2
-                    read_time['hdr'] = float(notes_lines[i+3].split()[1]) / 2
+
         
         # Bias plots
         # Get bias frames
         # We expect one bias file with 100 frames per gain mode: high, low, HDR
         if bias_present:
-            # Loop through the gain modes and load each bias frame individually using subframes
-            # These files are *very* large
-            med_bias_frames, noise_map, n_frame = {}, {}, {}
-            for gain in ['hdr','high','low']:
-                if 'subframe' in kwargs:
-                    # If a subframe is already defined, perform this on the subframe
-                    bifr = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias_{gain}', **kwargs)[0]
 
-                    # Build the median bias and noise frames
-                    if gain == 'hdr':
-                        med_bias_frames['high (dual-gain)'] = np.nanmedian(bifr.cds_frames[:,0],axis=0)
-                        med_bias_frames['low (dual-gain)'] = np.nanmedian(bifr.cds_frames[:,1],axis=0)
-                        noise_map['high (dual-gain)'] = np.nanstd(bifr.cds_frames[:,0],axis=0)
-                        noise_map['low (dual-gain)'] = np.nanstd(bifr.cds_frames[:,1],axis=0)
-                        n_frame['high (dual-gain)'], n_frame['low (dual-gain)'] = len(bifr.cds_frames), len(bifr.cds_frames)
-                    else:
-                        med_bias_frames[gain] = np.nanmedian(bifr.cds_frames,axis=0)
-                        noise_map[gain] = np.nanstd(bifr.cds_frames,axis=0)
-                        n_frame[gain] = len(bifr.cds_frames)
-                else:
-                    # If doing this for the whole detector, use subframe functionality
-                    # to do this channel-by-channel to save time and memory
-                    if gain == 'hdr':
-                        med_bias_frames['high (dual-gain)'] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
-                        med_bias_frames['low (dual-gain)'] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
-                        noise_map['high (dual-gain)'] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
-                        noise_map['low (dual-gain)'] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
-                        for i in range(n_channels):
-                            chsf = (i*cw,(i+1)*cw-1,0,exp.dev_size[1]-1) # Define subframe for this channel
-                            bifr = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias_{gain}', subframe=chsf, **kwargs)[0]
-                            
-                            # Build the median bias and noise frames
-                            med_bias_frames['high (dual-gain)'][:,i*cw:(i+1)*cw] = np.nanmedian(bifr.cds_frames[:,0],axis=0)
-                            med_bias_frames['low (dual-gain)'][:,i*cw:(i+1)*cw] = np.nanmedian(bifr.cds_frames[:,1],axis=0)
-                            noise_map['high (dual-gain)'][:,i*cw:(i+1)*cw] = np.nanstd(bifr.cds_frames[:,0],axis=0)
-                            noise_map['low (dual-gain)'][:,i*cw:(i+1)*cw] = np.nanstd(bifr.cds_frames[:,1],axis=0)
-                        
-                        # Store number of frames used
-                        n_frame['high (dual-gain)'] = len(bifr.cds_frames)
-                        n_frame['low (dual-gain)'] = len(bifr.cds_frames)
-                    else:
-                        med_bias_frames[gain] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
-                        noise_map[gain] = np.zeros((exp.dev_size[1], exp.dev_size[0]))
-                        for i in range(n_channels):
-                            chsf = (i*cw,(i+1)*cw-1,0,exp.dev_size[1]-1) # Define subframe for this channel
-                            bifr = load_by_file_prefix(f'{dirname}/{camera}_{detid}_bias_{gain}', subframe=chsf, **kwargs)[0]
-                            
-                            # Build the median bias and noise frames
-                            med_bias_frames[gain][:,i*cw:(i+1)*cw] = np.nanmedian(bifr.cds_frames,axis=0)
-                            noise_map[gain][:,i*cw:(i+1)*cw] = np.nanstd(bifr.cds_frames,axis=0)
-                        
-                        # Store number of frames used
-                        n_frame[gain] = len(bifr.cds_frames)
 
             # Now create bias and noise map summary pages
             noise_map_e = {}
