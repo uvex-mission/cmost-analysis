@@ -1,5 +1,6 @@
 import cmost_camera
-from pyarchon import cmost as cam
+
+# WARNING: don't put underscores in camid or detid or it will mess up the analysis script
 
 # Define camera setup here
 camid = 'cmost'                 # Camera name i.e. 'cmost' or 'cmostjpl'

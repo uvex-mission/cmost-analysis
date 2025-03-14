@@ -49,11 +49,32 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
     '''
     start = time.time()
     
+    # Define the output directory
+    # Parse config file
+    output_dir = None
+    with open(config_filepath) as f:
+        for line in f:
+            # Get the ACF
+            if line.startswith('DEFAULT_FIRMWARE'): acf_file = line.split('=')[1][:-1]
+            # Define the output directory
+            if line.startswith('IMDIR'):
+                data_dir = line.split('=')[1][:-1]
+                datestring = time.strftime('%Y%m%d', time.gmtime())
+                v = np.sum([datestring in d for d in os.listdir(data_dir)])
+                if v > 0: output_dir = data_dir+'/'+datestring+'_'+str(v)+'/'
+                else: output_dir = data_dir+'/'+datestring+'/'
+    
+    if output_dir:
+        os.mkdir(output_dir)
+    else:
+        print('Problem defining output directory')
+        exit()
+    
     # Dump .acf and notes file into the output directory
-    notes_filepath = dump_info(config_filepath)
+    notes_filepath = dump_info(acf_file, output_dir)
 
     # Start up the camera
-    basename = setup_camera(camid,detid)
+    basename = setup_camera(camid, detid, output_dir)
     
     # Get device temperature (currently not being recorded)
     if camid == 'cmost': c = 1
@@ -276,7 +297,7 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
     
     print('Total time elapsed: '+str(time.time() - start)+' s')
 
-def setup_camera(camid,detid):
+def setup_camera(camid,detid,output_dir=None):
     '''
     Initialize camera and return the basename
     '''
@@ -299,6 +320,12 @@ def setup_camera(camid,detid):
    
     # Activate Clocks
     cam.set_param('Start',1)
+    
+    if output_dir:
+        # Set and fix the output directory to provided output directory
+        cam.__send_command('autodir', 'no')
+        cam.__send_command('imdir', output_dir)
+    # Otherwise CameraD will simply output into dated folder as usual
  
     return basename
 
@@ -333,27 +360,17 @@ def set_gain(gain):
     cam.__send_command('longexposure','true')
     return True
 
-def dump_info(config_filepath):
+def dump_info(acf_file, output_dir):
     '''
     Take information from config file and dump acf and notes file into output directory
     
     Parameters
     ----------
-    config_filepath : string
-        Path to config file being used with the camera server
+    acf_file : string
+        Path to acf file being used with the camera server
+    output_dir : string
+        Path to the output data directory
     '''
-    cfg_file = open(config_filepath)
-    
-    for line in cfg_file.readlines():
-        if line.startswith("DEFAULT_FIRMWARE"):
-            acf_file = line.split('=')[1][:-1]
-        if line.startswith("IMDIR"):
-            output_dir = line.split('=')[1][:-1]+'/'time.strftime('%Y%m%d', time.gmtime())
-            
-    # Check for output directory
-    if not os.path.isdir(output_dir):
-        os.mkdir(output_dir)
-    
     # Dump acf file into output directory
     shutil.copy2(acf_file,output_dir)
     
@@ -362,7 +379,7 @@ def dump_info(config_filepath):
     notes += 'Notes:\n\n'
     
     notes_filepath = output_dir+'/analysis_notes.txt'
-    notes_file = open(notes_filepath,'w')
+    notes_file = open(notes_filepath,'a')
     notes_file.write(notes)
     notes_file.close()
     
