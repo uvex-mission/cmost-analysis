@@ -352,6 +352,10 @@ class Exposure():
             device_string = 'Guiding Row'
         else:
             device_string = 'Device'
+            
+        subframe_string = ''
+        if self.subframe:
+            subframe_string = 'Subframe: {}'.format(self.subframe)
 
         # Create info string
         info_string = """ Properties:
@@ -368,11 +372,12 @@ class Exposure():
         Gain mode: {}
         Number of frames: {}{} frames
         {}
+        {}
         """.format(self.firmware, self.camera_id, self.det_id,
                     device_string, self.dev_size[0], self.dev_size[1],
                     self.date.isoformat(), self.readout_mode, self.exp_time,
                     self.led_voltage, self.temperature, self.tpixel_hold,
-                    self.gain, len(self.cds_frames), hdr_string, custom_key_str)
+                    self.gain, len(self.cds_frames), hdr_string, subframe_string, custom_key_str)
         return info_string
 
     def get_mean(self, subframe, mask=None):
