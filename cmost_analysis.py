@@ -1073,6 +1073,7 @@ def standard_analysis_products(dirname, **kwargs):
 
             plt.tight_layout()
             fig.text(0.96, 0.02, pdf.get_pagecount()+1)
+            plt.savefig(os.path.join(output_dirname,f'{output_prefix}_ptc.png'))
             pdf.savefig()
             plt.close()
             
