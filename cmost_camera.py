@@ -132,7 +132,7 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
             # Select random pixel within first 256 x 1k pixels
             # for compatibility with multiple device sizes
             # This pixel in each channel will be read out
-            xpix, ypix = np.random.randint(0,256), np.random.randint(0,1024)
+            xpix, ypix = np.random.randint(0,255), np.random.randint(0,1023)
             cam.key('XPIX='+str(xpix)+'//Pixel X position')
             cam.key('YPIX='+str(xpix)+'//Pixel Y position')
             cam.set_param('Xpix',xpix)
@@ -249,6 +249,30 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
         cam.key('LONGEXPO=1// 1|0 means exposure in s|ms')
         cam.set_param('InitFrame',1) # Apply initial reset frame but don't capture resulting image
         cam.key('NORESET=1//Reset frame has been removed')
+        
+    # Persistence test by taking saturated frames followed by darks
+    if persist:
+        if ledw == 'None':
+            print('No LED wavelength specified, skipping persistence test')
+        else:
+            # Get the ideal saturation voltage for this LED
+            sat_voltage = get_sat_v(ledw)
+            
+            if sat_voltage is not None:
+                print('Taking persistence test exposures (<1 min)...')
+                # First take 3x saturated exposures
+                set_gain('high')
+                cam.set_basename(basename+'_persistillum_'+str(voltage))
+                cam.key('LED='+str(sat_voltage)+'// LED voltage in Volts')
+                cam.setled(sat_voltage)
+                cam.expose(0,3,0)
+                # Then turn off LED and take further exposures
+                cam.set_basename(basename+'_persistdark_'+str(voltage))
+                cam.key('LED=.')
+                cam.setled(-0.1)
+                cam.expose(0,30,0)
+            else:
+                print('No saturation voltage set found for this LED, skipping persistence test')
     
     # Illuminated flat frame sequence for PTC
     if flat:
@@ -437,7 +461,7 @@ def get_ptc_setup(ledw):
 
 def get_sat_v(ledw):
     '''
-    Get a voltage that will saturate the LED in a minimum-length high-gain exposure
+    Get a voltage that will saturate the detector in a minimum-length high-gain exposure
     Not possible for all LEDs, currently
     '''
     switch = {

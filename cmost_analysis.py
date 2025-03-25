@@ -53,18 +53,18 @@ def standard_analysis_products(dirname, **kwargs):
     camera = f[0]
     detid = f[1]
     
-    # Load first file that's not a guiding or bias file (otherwise doesn't matter which it is) for device information
-    non_guiding = [(('guiding' not in f) & ('bias' not in f)) for f in file_table['FILEPATH']]
+    # Load first file that's not a guiding, noisespectrum or bias file (otherwise doesn't matter which it is) for device information
+    non_guiding = [(('guiding' not in f) & ('bias' not in f) & ('noisespec' not in f)) for f in file_table['FILEPATH']]
     if np.sum(non_guiding) == 0:
         # TODO: If we only have bias frames, make a way to get exp info without actually loading the frame
-        non_guiding = [('guiding' not in f) for f in file_table['FILEPATH']]
+        non_guiding = [(('guiding' not in f) & ('noisespec' not in f)) for f in file_table['FILEPATH']]
     exp = Exposure(file_table[non_guiding][0]['FILEPATH'])
     cw = exp.col_width
     n_channels = exp.dev_size[0] // cw
     
     # Scan through files to find out what's available
     bias_present, noise_present, opdark_present, longdark_present, singleframe_present = 0, 0, 0, 0, 0
-    flat_present, flatdark_present, notes_present = 0, 0, 0
+    flat_present, flatdark_present, persist_present, notes_present = 0, 0, 0, 0
     opdark_modes = []
     for f in file_table['FILEPATH']:
         if 'bias' in f: bias_present = 1
@@ -82,6 +82,7 @@ def standard_analysis_products(dirname, **kwargs):
         if 'flat_' in f: flat_present = 1
         if 'flatdark' in f: flatdark_present = 1
         if 'singleframe' in f: singleframe_present = 1
+        if 'persist' in f: persist_present = 1
 
     # Check for notes file
     if os.path.exists(dirname+'/analysis_notes.txt'):
@@ -381,7 +382,22 @@ def standard_analysis_products(dirname, **kwargs):
         # No frame output for this one for now
         # TODO: do we want to store median frames for these?
     
-    
+    if persist_present:
+        # Load the saturated frames to confirm we're definitely saturating
+        persist_sat_frames = load_by_file_prefix(f'{dirname}/{camera}_{detid}_persistillum', **kwargs)[0]
+        sat_voltage = persist_sat_frames.filepath.split('_')[3]
+        persist_sat_median = np.nanmedian(persist_sat_frames.cds_frames, axis=0)
+        
+        # Load dark frames from the persistence test
+        pd = load_by_file_prefix(f'{dirname}/{camera}_{detid}_persistdark', **kwargs)[0]
+        
+        if bias_present:
+            persist_sat_median = np.nanmedian(persist_sat_frames.cds_frames, axis=0) - med_bias_frames['high']
+            persist_dark_frames = pd.cds_frames - med_bias_frames['high']
+        else:
+            persist_sat_median = np.nanmedian(persist_sat_frames.cds_frames, axis=0)
+            persist_dark_frames = pd.cds_frames
+
     if flat_present:
         # Initialize dictionaries and identify the list of flat frame files
         mid_flats, mid_flats_e, mid_flat_times, mid_flat_voltages, mid_flat_comment = {}, {}, {}, {}, {}
@@ -396,7 +412,7 @@ def standard_analysis_products(dirname, **kwargs):
         for gain in ['hdr','high','low']:
             # If flat darks are present, load these up
             if flatdark_present:
-                flatdark_frames = load_by_file_prefix(f'{dirname}/{camera}_{detid}_{flatdark}_{gain}', **kwargs)
+                flatdark_frames = load_by_file_prefix(f'{dirname}/{camera}_{detid}_flatdark_{gain}', **kwargs)
                 
                 if gain == 'hdr':
                     flat_darks['high (dual-gain)'], flat_darks['low (dual-gain)'] = [], []
@@ -657,7 +673,11 @@ def standard_analysis_products(dirname, **kwargs):
             long_low_opdark_e[mode] = long_low_opdark[mode] * use_gain['low (dual-gain)'] / oplong[mode]
             short_high_opdark_e[mode] = short_high_opdark[mode] * use_gain['high (dual-gain)'] / opshort[mode]
             short_low_opdark_e[mode] = short_low_opdark[mode] * use_gain['low (dual-gain)'] / opshort[mode]
-            
+    
+    if persist_present:
+        persist_sat_median_e = persist_sat_median * use_gain['high']
+        persist_dark_frames_e = persist_dark_frames * use_gain['high']
+
     # Write all these FITS files again in electron (/s) units
     if bias_present:
         bias_e_outpath = write_fits_image(med_bias_frames_e, 'bias frame', bias_comment,
@@ -716,6 +736,7 @@ def standard_analysis_products(dirname, **kwargs):
         if bias_present: summary_text += '- Bias frames\n'
         if longdark_present: summary_text += '- Long dark frames\n'
         if opdark_present: summary_text += '- Standard operating dark frames\n'
+        if persist_present: summary_text += '- Persistence test frames\n'
         if flat_present: summary_text += f'- Flat fields vs exposure time\n'
         
         # Include any notes from the analysis_notes file
@@ -745,17 +766,22 @@ def standard_analysis_products(dirname, **kwargs):
                          format=mticker.FixedFormatter(['Good', 'High Noise', 'High Dark', 'Low Sensitivity']))
             
             # Get combined numbers and percentages of bad pixels
-            total_noise_bad = np.sum(np.any(np.stack(list(noise_bad.values())),axis=0))
-            total_noise_percent_bad = total_noise_bad / bad_pixel_map.size * 100
-            total_dark_bad = np.sum(np.any(np.stack(list(dark_bad.values())),axis=0))
-            total_dark_percent_bad = total_dark_bad / bad_pixel_map.size * 100
-            total_flat_bad = np.sum(np.any(np.stack(list(flat_bad.values())),axis=0))
-            total_flat_percent_bad = total_flat_bad / bad_pixel_map.size * 100
-            total_percentage_bad = np.sum((bad_pixel_map > 0)) / bad_pixel_map.size * 100
+            summary_text = ''
             
-            summary_text = f'High noise pixels (>{noise_bad_thresh} e-): {total_noise_bad} ({total_noise_percent_bad:.2f} %)\n'
-            summary_text += f'High dark current pixels (>{dark_bad_thresh} e-/s): {total_dark_bad} ({total_dark_percent_bad:.2f} %)\n'
-            summary_text += f'Low sensitivity current pixels (<5-sigma below mean): {total_flat_bad} ({total_flat_percent_bad:.2f} %)\n'
+            if bias_present:
+                total_noise_bad = np.sum(np.any(np.stack(list(noise_bad.values())),axis=0))
+                total_noise_percent_bad = total_noise_bad / bad_pixel_map.size * 100
+                summary_text += f'High noise pixels (>{noise_bad_thresh} e-): {total_noise_bad} ({total_noise_percent_bad:.2f} %)\n'
+            if longdark_present:
+                total_dark_bad = np.sum(np.any(np.stack(list(dark_bad.values())),axis=0))
+                total_dark_percent_bad = total_dark_bad / bad_pixel_map.size * 100
+                summary_text += f'High dark current pixels (>{dark_bad_thresh} e-/s): {total_dark_bad} ({total_dark_percent_bad:.2f} %)\n'
+            if flat_present:
+                total_flat_bad = np.sum(np.any(np.stack(list(flat_bad.values())),axis=0))
+                total_flat_percent_bad = total_flat_bad / bad_pixel_map.size * 100
+                summary_text += f'Low sensitivity current pixels (<5-sigma below mean): {total_flat_bad} ({total_flat_percent_bad:.2f} %)\n'
+            total_percentage_bad = np.sum((bad_pixel_map > 0)) / bad_pixel_map.size * 100
+
             summary_text += f'Total number of bad pixels: {int(np.sum(bad_pixel_map))} ({total_percentage_bad:.2f} %)'
             plt.text(-0.5, -1, summary_text, transform=ax1.transAxes, verticalalignment='top')
             
@@ -908,100 +934,49 @@ def standard_analysis_products(dirname, **kwargs):
                 else:
                     hist_page(pdf, plot_dark, f'Long darks - {g} frame', summary_text, unit='e-/s', precision=prec, vlines=[read_noise_level])
 
-        # Standard operating darks
-        if opdark_present:
-            for mode in long_high_opdark:
-                # For each resulting median frame, print a page of plots
-                n_frames = len(long_high_opdark[mode])
-                frames = [np.median(short_low_opdark_e[mode],axis=0), np.median(short_high_opdark_e[mode],axis=0),
-                          np.median(long_low_opdark_e[mode],axis=0), np.median(long_high_opdark_e[mode],axis=0)]
-                names = ['short low-gain','short high-gain','long low-gain','long high-gain']
-                precisions = [use_gain['low (dual-gain)']/opshort[mode], use_gain['high (dual-gain)']/opshort[mode],
-                              use_gain['low (dual-gain)']/oplong[mode], use_gain['high (dual-gain)']/oplong[mode]]
-                times = [opshort[mode], opshort[mode], oplong[mode], oplong[mode]]
-                
-                for j, med_dark in enumerate(frames):
-                    mmin, mmax, mmedian, mmean = min(med_dark.flatten()), max(med_dark.flatten()), np.median(med_dark), np.mean(med_dark)
-                    
-                    summary_text = f'Frame: {names[j]}, no bias subtraction\n'
-                    summary_text += f'Median of {n_frame} x {times[j]}s exposures\n'
-                    summary_text += f'Min median pixel value: {mmin:.2f} e-/s; max median pixel value: {mmax:.2f} e-/s \n'
-                    summary_text += f'Median pixel value: {mmedian:.2f} e-/s; mean pixel value: {mmean:.2f} e-/s'
-                    
-                    # Create a standard histogram page and save it to the pdf
-                    hist_page(pdf, med_dark, f'Dark frames - {mode} mode - {names[j]} frame',
-                              summary_text, precision=precisions[j], unit='e-/s')
-                
-                # Also make a page of mean values over time
-                fig = plt.figure(figsize=[8.5,11],dpi=250)
-                plt.suptitle(f'Dark frames - {mode} mode - mean over time')
-                
-                ax1 = plt.subplot2grid((4,1), (0,0))
-                ax2 = plt.subplot2grid((4,1), (1,0))
-                ax3 = plt.subplot2grid((4,1), (2,0))
-                ax4 = plt.subplot2grid((4,1), (3,0))
-                
-                # Mean short-frame dark value over time (whole frame + every column)
-                sl_mean = np.mean(short_low_opdark[mode], axis=(1,2)) * use_gain['low (dual-gain)']
-                sl_std = np.std(short_low_opdark[mode], axis=(1,2)) * use_gain['low (dual-gain)']
-                sh_mean = np.mean(short_high_opdark[mode], axis=(1,2)) * use_gain['high (dual-gain)']
-                sh_std = np.std(short_high_opdark[mode], axis=(1,2)) * use_gain['high (dual-gain)']
-                ll_mean = np.mean(long_low_opdark[mode], axis=(1,2)) * use_gain['low (dual-gain)']
-                ll_std = np.std(long_low_opdark[mode], axis=(1,2)) * use_gain['low (dual-gain)']
-                lh_mean = np.mean(long_high_opdark[mode], axis=(1,2)) * use_gain['high (dual-gain)']
-                lh_std = np.std(long_high_opdark[mode], axis=(1,2)) * use_gain['high (dual-gain)']
-                
-                if 'subframe' not in kwargs:
-                    # Also show a column-by-column breakdown if not looking at a subframe
-                    sl_col_mean, sh_col_mean, ll_col_mean, lh_col_mean = [], [], [], []
-                    for i in range(n_channels):
-                        sl_col_mean.append(np.mean(short_low_opdark[mode][:,:,i*cw:(i+1)*cw],axis=(1,2)) * nom_gain['low (dual-gain)'])
-                        sh_col_mean.append(np.mean(short_high_opdark[mode][:,:,i*cw:(i+1)*cw],axis=(1,2)) * nom_gain['high (dual-gain)'])
-                        ll_col_mean.append(np.mean(long_low_opdark[mode][:,:,i*cw:(i+1)*cw],axis=(1,2)) * nom_gain['low (dual-gain)'])
-                        lh_col_mean.append(np.mean(long_high_opdark[mode][:,:,i*cw:(i+1)*cw],axis=(1,2)) * nom_gain['high (dual-gain)'])
-                    frame_label = 'Whole detector'
-                else:
-                    frame_label = f'Subframe: {kwargs["subframe"]}'
-
-                plt.sca(ax1)
-                plt.title(f'{names[0]}')
-                plt.plot(s_starts_opdark[mode],sl_mean,'x-',color='k',label=frame_label)
-                plt.fill_between(s_starts_opdark[mode],sl_mean-sl_std,sl_mean+sl_std,color='k',alpha=0.1, label='St. Dev.')
-                if 'subframe' not in kwargs:
-                    for j in range(n_channels): p = plt.plot(s_starts_opdark[mode],sl_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
-                plt.ylabel('e-')
-                plt.legend(fontsize=10,ncol=6,loc=9)
-                
-                plt.sca(ax2)
-                plt.title(f'{names[1]}')
-                plt.plot(s_starts_opdark[mode],sh_mean,'x-',color='k',label=frame_label)
-                plt.fill_between(s_starts_opdark[mode],sh_mean-sh_std,sh_mean+sh_std,color='k',alpha=0.1, label='St. Dev.')
-                if 'subframe' not in kwargs:
-                    for j in range(n_channels): plt.plot(s_starts_opdark[mode],sh_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
-                plt.ylabel('e-')
-                
-                # Mean long-frame dark value over time
-                plt.sca(ax3)
-                plt.title(f'{names[2]}')
-                plt.plot(l_starts_opdark[mode],ll_mean,'x-',color='k',label=frame_label)
-                plt.fill_between(l_starts_opdark[mode],ll_mean-ll_std,ll_mean+ll_std,color='k',alpha=0.1, label='St. Dev.')
-                if 'subframe' not in kwargs:
-                    for j in range(n_channels): plt.plot(l_starts_opdark[mode],ll_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
-                plt.ylabel('e-')
-                
-                plt.sca(ax4)
-                plt.title(f'{names[3]}')
-                plt.plot(l_starts_opdark[mode],lh_mean,'x-',color='k',label=frame_label)
-                plt.fill_between(l_starts_opdark[mode],lh_mean-lh_std,lh_mean+lh_std,color='k',alpha=0.1, label='St. Dev.')
-                if 'subframe' not in kwargs:
-                    for j in range(n_channels): plt.plot(l_starts_opdark[mode],lh_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
-                plt.xlabel('Time (s)')
-                plt.ylabel('e-')
-                
-                plt.tight_layout()
-                fig.text(0.96, 0.02, pdf.get_pagecount()+1)
-                pdf.savefig()
-                plt.close()
+        # Persistence test
+        if persist_present:
+            fig = plt.figure(figsize=[8.5,11],dpi=300)
+            plt.suptitle(f'Persistence test')
+            
+            # Output a frame image and histograms
+            ax1 = plt.subplot2grid((4,2), (0,0))
+            darkax = [plt.subplot2grid((4,2), (0,1)), plt.subplot2grid((4,2), (1,0)), plt.subplot2grid((4,2), (1,1))]
+            ax5 = plt.subplot2grid((4,1), (2,0))
+            
+            # Median saturated frame
+            plt.sca(ax1)
+            plt.title('Saturated frame')
+            plt.imshow(persist_sat_median_e, vmin=np.percentile(persist_sat_median_e,0.03), vmax=np.percentile(persist_sat_median_e,99.7))
+            plt.colorbar(label='e-', shrink=0.9)
+            
+            # First three dark frames
+            for i, ax in enumerate(darkax):
+                plt.sca(ax)
+                plt.title(f'Post-saturated dark {i+1}')
+                imdata = persist_dark_frames_e[i]
+                # Set scaling to match the first frame in sequence
+                if i == 0: vmin, vmax = np.percentile(imdata,0.03), np.percentile(imdata,99.7)
+                plt.imshow(imdata, vmin=vmin, vmax=vmax)
+                plt.colorbar(label='e-', shrink=0.9)
+            
+            # Plot of dark median over time
+            if 'high' in read_time:
+                times = np.arange(len(persist_dark_frames_e)) * read_time['high']
+                timeu = 's'
+            else:
+                times = np.arange(len(persist_dark_frames_e))
+                timeu = 'Frame number'
+            dark_medians = np.nanmedian(persist_dark_frames_e, axis=(1,2))
+            
+            plt.sca(ax5)
+            plt.plot(times, dark_medians)
+            plt.xlabel(f'Time ({timeu})')
+            plt.ylabel('Mean Signal (e-)')
+            plt.tight_layout()
+            
+            pdf.savefig()
+            plt.close()
 
         # Flats, linearity and PTCs
         if flat_present:
@@ -1159,6 +1134,101 @@ def standard_analysis_products(dirname, **kwargs):
             plt.close()
             
         # TODO: something for guiding rows
+        
+        # Standard operating darks
+        if opdark_present:
+            for mode in long_high_opdark:
+                # For each resulting median frame, print a page of plots
+                n_frames = len(long_high_opdark[mode])
+                frames = [np.median(short_low_opdark_e[mode],axis=0), np.median(short_high_opdark_e[mode],axis=0),
+                          np.median(long_low_opdark_e[mode],axis=0), np.median(long_high_opdark_e[mode],axis=0)]
+                names = ['short low-gain','short high-gain','long low-gain','long high-gain']
+                precisions = [use_gain['low (dual-gain)']/opshort[mode], use_gain['high (dual-gain)']/opshort[mode],
+                              use_gain['low (dual-gain)']/oplong[mode], use_gain['high (dual-gain)']/oplong[mode]]
+                times = [opshort[mode], opshort[mode], oplong[mode], oplong[mode]]
+                
+                for j, med_dark in enumerate(frames):
+                    mmin, mmax, mmedian, mmean = min(med_dark.flatten()), max(med_dark.flatten()), np.median(med_dark), np.mean(med_dark)
+                    
+                    summary_text = f'Frame: {names[j]}, no bias subtraction\n'
+                    summary_text += f'Median of {n_frame} x {times[j]}s exposures\n'
+                    summary_text += f'Min median pixel value: {mmin:.2f} e-/s; max median pixel value: {mmax:.2f} e-/s \n'
+                    summary_text += f'Median pixel value: {mmedian:.2f} e-/s; mean pixel value: {mmean:.2f} e-/s'
+                    
+                    # Create a standard histogram page and save it to the pdf
+                    hist_page(pdf, med_dark, f'Dark frames - {mode} mode - {names[j]} frame',
+                              summary_text, precision=precisions[j], unit='e-/s')
+                
+                # Also make a page of mean values over time
+                fig = plt.figure(figsize=[8.5,11],dpi=250)
+                plt.suptitle(f'Dark frames - {mode} mode - mean over time')
+                
+                ax1 = plt.subplot2grid((4,1), (0,0))
+                ax2 = plt.subplot2grid((4,1), (1,0))
+                ax3 = plt.subplot2grid((4,1), (2,0))
+                ax4 = plt.subplot2grid((4,1), (3,0))
+                
+                # Mean short-frame dark value over time (whole frame + every column)
+                sl_mean = np.mean(short_low_opdark[mode], axis=(1,2)) * use_gain['low (dual-gain)']
+                sl_std = np.std(short_low_opdark[mode], axis=(1,2)) * use_gain['low (dual-gain)']
+                sh_mean = np.mean(short_high_opdark[mode], axis=(1,2)) * use_gain['high (dual-gain)']
+                sh_std = np.std(short_high_opdark[mode], axis=(1,2)) * use_gain['high (dual-gain)']
+                ll_mean = np.mean(long_low_opdark[mode], axis=(1,2)) * use_gain['low (dual-gain)']
+                ll_std = np.std(long_low_opdark[mode], axis=(1,2)) * use_gain['low (dual-gain)']
+                lh_mean = np.mean(long_high_opdark[mode], axis=(1,2)) * use_gain['high (dual-gain)']
+                lh_std = np.std(long_high_opdark[mode], axis=(1,2)) * use_gain['high (dual-gain)']
+                
+                if 'subframe' not in kwargs:
+                    # Also show a column-by-column breakdown if not looking at a subframe
+                    sl_col_mean, sh_col_mean, ll_col_mean, lh_col_mean = [], [], [], []
+                    for i in range(n_channels):
+                        sl_col_mean.append(np.mean(short_low_opdark[mode][:,:,i*cw:(i+1)*cw],axis=(1,2)) * nom_gain['low (dual-gain)'])
+                        sh_col_mean.append(np.mean(short_high_opdark[mode][:,:,i*cw:(i+1)*cw],axis=(1,2)) * nom_gain['high (dual-gain)'])
+                        ll_col_mean.append(np.mean(long_low_opdark[mode][:,:,i*cw:(i+1)*cw],axis=(1,2)) * nom_gain['low (dual-gain)'])
+                        lh_col_mean.append(np.mean(long_high_opdark[mode][:,:,i*cw:(i+1)*cw],axis=(1,2)) * nom_gain['high (dual-gain)'])
+                    frame_label = 'Whole detector'
+                else:
+                    frame_label = f'Subframe: {kwargs["subframe"]}'
+
+                plt.sca(ax1)
+                plt.title(f'{names[0]}')
+                plt.plot(s_starts_opdark[mode],sl_mean,'x-',color='k',label=frame_label)
+                plt.fill_between(s_starts_opdark[mode],sl_mean-sl_std,sl_mean+sl_std,color='k',alpha=0.1, label='St. Dev.')
+                if 'subframe' not in kwargs:
+                    for j in range(n_channels): p = plt.plot(s_starts_opdark[mode],sl_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
+                plt.ylabel('e-')
+                plt.legend(fontsize=10,ncol=6,loc=9)
+                
+                plt.sca(ax2)
+                plt.title(f'{names[1]}')
+                plt.plot(s_starts_opdark[mode],sh_mean,'x-',color='k',label=frame_label)
+                plt.fill_between(s_starts_opdark[mode],sh_mean-sh_std,sh_mean+sh_std,color='k',alpha=0.1, label='St. Dev.')
+                if 'subframe' not in kwargs:
+                    for j in range(n_channels): plt.plot(s_starts_opdark[mode],sh_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
+                plt.ylabel('e-')
+                
+                # Mean long-frame dark value over time
+                plt.sca(ax3)
+                plt.title(f'{names[2]}')
+                plt.plot(l_starts_opdark[mode],ll_mean,'x-',color='k',label=frame_label)
+                plt.fill_between(l_starts_opdark[mode],ll_mean-ll_std,ll_mean+ll_std,color='k',alpha=0.1, label='St. Dev.')
+                if 'subframe' not in kwargs:
+                    for j in range(n_channels): plt.plot(l_starts_opdark[mode],ll_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
+                plt.ylabel('e-')
+                
+                plt.sca(ax4)
+                plt.title(f'{names[3]}')
+                plt.plot(l_starts_opdark[mode],lh_mean,'x-',color='k',label=frame_label)
+                plt.fill_between(l_starts_opdark[mode],lh_mean-lh_std,lh_mean+lh_std,color='k',alpha=0.1, label='St. Dev.')
+                if 'subframe' not in kwargs:
+                    for j in range(n_channels): plt.plot(l_starts_opdark[mode],lh_col_mean[j],'x-',alpha=0.5,label=f'Col {j}')
+                plt.xlabel('Time (s)')
+                plt.ylabel('e-')
+                
+                plt.tight_layout()
+                fig.text(0.96, 0.02, pdf.get_pagecount()+1)
+                pdf.savefig()
+                plt.close()
 
 
 def hist_page(pdf, data, title, summary_text, unit='e-', precision=1, contours=False, vlines=False):
