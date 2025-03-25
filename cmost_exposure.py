@@ -78,6 +78,7 @@ class Exposure():
     dev_size : tuple
         Device size in pixels as (width, height)
         Will instead store the guiding row size for GUIDING readout mode
+        Will store device width but only 1-pix height for NOISESPECTRUM readout mode
     
     gain : string
         Gain mode being used
@@ -89,7 +90,7 @@ class Exposure():
         TPixel Hold
         
     col_width : int
-        Width of a column in pixels
+        Width of a channel in pixels
         
     subframe : tuple
         User-defined subframe to load
@@ -158,8 +159,8 @@ class Exposure():
         self.firmware = cmost_hdr.get('FIRMWARE','')
         self.tpixel_hold = cmost_hdr.get('TPIXEL_H',-1)
         
-        # The column width is always 256 pixels
-        self.col_width = 256 # Column width in pixels
+        # The channel width is always 256 pixels
+        self.col_width = 256 # Channel width in pixels
     
         # Any other non-default header keys to search for as passed by user
         self.custom_key_values = {}
@@ -198,6 +199,10 @@ class Exposure():
         elif self.readout_mode in ['ROLLINGRESET_HDR']:
             cols_per_channel = 4
             self.dev_size = (frame_shape[1]//cols_per_channel, frame_shape[0]) # Width, height
+        elif self.readout_mode in ['NOISESPECTRUM']:
+            cols_per_channel = 16
+            self.dev_size = (frame_shape[1]//cols_per_channel, 1) # Width, height
+            # Nb: no actual detector height information stored in this mode
         else:
             # If no readout mode is specified we'll just return raw data
             cols_per_channel = 1
@@ -205,7 +210,7 @@ class Exposure():
         
         # Read in the raw data
         self.subframe = subframe
-        if self.subframe:
+        if self.subframe and (self.readout_mode not in ['NOISESPECTRUM']):
             # Validate the subframe
             x1,x2,y1,y2 = self.subframe
             assert ((x1 >= 0) & (x2 < self.dev_size[0]) & (x2 > x1) &
@@ -227,8 +232,13 @@ class Exposure():
                 self.raw_frames[i] = np.array(cmost_file[i+ignore_ext].data, dtype=np.uint32)
                 del cmost_file[i+ignore_ext].data # Remove this extension from memory
         
-        # Perform CDS on the frames
-        self.perform_cds(graycode)
+        if self.readout_mode in ['NOISESPECTRUM']:
+            # Noise spectrum is actually for a single pixel
+            # Just return raw frame and handle in external analysis
+            self.cds_frames = self.raw_frames
+        else:
+            # Perform CDS on the frames
+            self.perform_cds(graycode)
 
         cmost_file.close()
 
