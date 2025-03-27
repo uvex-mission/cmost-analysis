@@ -62,6 +62,9 @@ class Exposure():
     
     exp_time : float
         Exposure time in seconds
+        
+    frame_time : float
+        Frame readout time in milliseconds
     
     led_voltage : float
         LED voltage in Volts
@@ -150,6 +153,7 @@ class Exposure():
         else:
             # Exposure time in ms, convert to s
             self.exp_time = float(cmost_hdr.get('EXPTIME',-1000)) / 1000.
+        self.frame_time = cmost_hdr.get('FRAMTIME',-1)
         self.camera_id = cmost_hdr.get('CAMERAID','')
         self.det_id = cmost_hdr.get('DETID','')
         if self.readout_mode in ['ROLLINGRESET_HDR']:
@@ -636,7 +640,7 @@ def scan_headers(directory,custom_keys=[]):
                 # List the default properties
                 row = [filepath, readout_mode,
                         hdr.get('DATE','0001-01-01T00:00:00'),
-                        exp_time, led,
+                        exp_time, hdr.get('FRAMTIME',-1), led,
                         float(hdr.get('TEMP',-1)), hdr.get('CAMERAID',''),
                         hdr.get('DETID',''), gain, hdr.get('FIRMWARE',''),
                         float(hdr.get('TPIXEL_H',-1)), num_exp]
@@ -654,7 +658,7 @@ def scan_headers(directory,custom_keys=[]):
             return False
         
         # Define column names
-        col_names = ['FILEPATH', 'READOUTM', 'DATE', 'EXPTIME', 'LED', 'TEMP',
+        col_names = ['FILEPATH', 'READOUTM', 'DATE', 'EXPTIME', 'FRAMTIME', 'LED', 'TEMP',
                     'CAMERAID', 'DETID', 'GAIN', 'FIRMWARE', 'TPIXEL_H', 'NUM_EXP']
         col_names.extend(custom_keys)
         

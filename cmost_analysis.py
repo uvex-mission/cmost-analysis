@@ -146,8 +146,8 @@ def standard_analysis_products(dirname, **kwargs):
     # - Performs analysis tasks and writes result files
     ###################################################
     
-    # Get frame readout time from the single-frame exposures
-    if singleframe_present and notes_present:
+    # If no frame time, get frame readout time from the single-frame exposures
+    if (exp.frame_time < 0) and singleframe_present and notes_present:
         for i, l in enumerate(notes_lines):
             if l.startswith('Readout times:'):
                 # A single frame readout lasts for a reset frame readout and an actual frame readout
@@ -397,6 +397,17 @@ def standard_analysis_products(dirname, **kwargs):
         else:
             persist_sat_median = np.nanmedian(persist_sat_frames.cds_frames, axis=0)
             persist_dark_frames = pd.cds_frames
+            
+        if pd.frame_time > 0:
+            persist_times = np.arange(len(persist_dark_frames_e)) * pd.frame_time/1000.
+            persist_tu = 's'
+        elif 'high' in read_time:
+            persist_times = np.arange(len(persist_dark_frames_e)) * read_time['high']
+            persist_tu = 's'
+        else:
+            persist_times = np.arange(len(persist_dark_frames_e))
+            persist_tu = 'Frame number'
+
 
     if flat_present:
         # Initialize dictionaries and identify the list of flat frame files
@@ -436,7 +447,8 @@ def standard_analysis_products(dirname, **kwargs):
                 flat_files = file_table['FILEPATH'][gain_flats]
                 flat_frames = load_by_filepath(file_table['FILEPATH'][gain_flats], **kwargs)
                 exptime = file_table['EXPTIME'][gain_flats]
-                if gain in read_time: exptime = exptime + read_time[gain]
+                if max(file_table['FRAMTIME'][gain_flats] > 0): exptime = exptime + file_table['FRAMTIME'][gain_flats]/1000.
+                elif gain in read_time: exptime = exptime + read_time[gain]
                 if (file_table['LED'][gain_flats] > -1).any():
                     led = file_table['LED'][gain_flats] # get LED voltage from FITS header
                 else:
@@ -961,17 +973,11 @@ def standard_analysis_products(dirname, **kwargs):
                 plt.colorbar(label='e-', shrink=0.9)
             
             # Plot of dark median over time
-            if 'high' in read_time:
-                times = np.arange(len(persist_dark_frames_e)) * read_time['high']
-                timeu = 's'
-            else:
-                times = np.arange(len(persist_dark_frames_e))
-                timeu = 'Frame number'
             dark_medians = np.nanmedian(persist_dark_frames_e, axis=(1,2))
             
             plt.sca(ax5)
-            plt.plot(times, dark_medians)
-            plt.xlabel(f'Time ({timeu})')
+            plt.plot(persist_times, dark_medians)
+            plt.xlabel(f'Time ({persist_tu})')
             plt.ylabel('Mean Signal (e-)')
             plt.tight_layout()
             
