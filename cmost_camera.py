@@ -134,7 +134,7 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
             # This pixel in each channel will be read out
             xpix, ypix = np.random.randint(0,255), np.random.randint(0,1023)
             cam.key('XPIX='+str(xpix)+'//Pixel X position')
-            cam.key('YPIX='+str(xpix)+'//Pixel Y position')
+            cam.key('YPIX='+str(ypix)+'//Pixel Y position')
             cam.set_param('Xpix',xpix)
             cam.set_param('Ypix',ypix)
             cam.expose(0,1,0)
@@ -290,12 +290,15 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
             
                 # First take darks for each exposure time length
                 # 3 exposures each for a median
-                cam.set_basename(basename+'_flatdark_'+g)
-                cam.key('EXPTIME=0//exposure time in seconds')
-                cam.expose(0,3,0)
-                for t in np.rint(np.logspace(0,2.3,10)):
-                    cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
-                    cam.expose(int(t),3,0)
+                for g in ['high','low','hdr']:
+                    print('Flat darks for '+g+' gain')
+                    set_gain(g)
+                    cam.set_basename(basename+'_flatdark_'+g)
+                    cam.key('EXPTIME=0//exposure time in seconds')
+                    cam.expose(0,3,0)
+                    for t in np.rint(np.logspace(0,2.3,10)):
+                        cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
+                        cam.expose(int(t),3,0)
                 
                 # Switch on LED
                 cam.key('LEDWAVE='+str(ledw)+'// LED wavelength in nm')
@@ -367,9 +370,10 @@ def setup_camera(camid,detid,output_dir=None):
     cam.key('CAMERAID='+camid+'//Camera ID')
     cam.key('DETID='+detid+'//Device ID')
     
-    # Set filename base
+    # Set filename base and naming scheme
     basename = camid+'_'+detid
     cam.set_basename(basename)
+    cam.__send_command('fitsnaming','date') # Confirm this command with Dave
     
     # Start with LED forced off
     cam.setled(-0.1)

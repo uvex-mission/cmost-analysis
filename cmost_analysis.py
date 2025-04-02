@@ -95,10 +95,10 @@ def standard_analysis_products(dirname, **kwargs):
         datestring = notes_lines[0].split()[3]
         filedatestring = datestring[0:4]+datestring[5:7]+datestring[8:10]
     else:
-        # Guess datestring from the file name
-        d = exp.filepath.split('_')
-        datestring = d[-1][0:4]+'-'+d[-1][4:6]+'-'+d[-1][6:8]
-        filedatestring = d[-1][0:8]
+        # Get datestring from the FITS header
+        exp_date = np.min([datetime.fromisoformat(f) for f in file_table['DATE']])
+        datestring = exp_date.strftime('%Y-%m-%d')
+        filedatestring = exp_date.strftime('%Y%m%d')
         
     # Check for LED used from exposures taken under illumination
     is_ledwave = file_table['LEDWAVE'] != None
@@ -433,11 +433,14 @@ def standard_analysis_products(dirname, **kwargs):
                         flat_darks['low (dual-gain)'].append(np.nanmedian(fd.cds_frames[:,1], axis=0))
                         flat_dark_times['high (dual-gain)'].append(fd.exp_time)
                         flat_dark_times['low (dual-gain)'].append(fd.exp_time)
+                    flat_darks['high (dual-gain)'] = np.array(flat_darks['high (dual-gain)'])
+                    flat_darks['low (dual-gain)'] = np.array(flat_darks['low (dual-gain)'])
                 else:
                     flat_darks[gain], flat_dark_times[gain] = [], []
                     for fd in flatdark_frames:
                         flat_darks[gain].append(np.nanmedian(fd.cds_frames, axis=0))
                         flat_dark_times[gain].append(fd.exp_time)
+                    flat_darks[gain] = np.array(flat_darks[gain])
             
             # Load up the flats
             gain_flats = (file_table['GAIN'] == gain) & np.array(allflats)
@@ -452,7 +455,7 @@ def standard_analysis_products(dirname, **kwargs):
                 if (file_table['LED'][gain_flats] > -1).any():
                     led = file_table['LED'][gain_flats] # get LED voltage from FITS header
                 else:
-                    led = [f.split('_')[4] for f in flat_files] # get LED voltage from filename
+                    led = [f.split('/')[-1].split('_')[4] for f in flat_files] # get LED voltage from filename
                 
                 led_vals = np.unique(led)
                 max_exp, max_i = max(exptime), np.argmax(exptime)
@@ -506,10 +509,10 @@ def standard_analysis_products(dirname, **kwargs):
 
                     mid_flat_times['high (dual-gain)'], mid_flat_times['low (dual-gain)'] = exptime[hmid_exp_i], exptime[lmid_exp_i]
                     mid_flat_voltages['high (dual-gain)'], mid_flat_voltages['low (dual-gain)'] = led[hmid_exp_i], led[lmid_exp_i]
-                    if flatdark_present:
-                        this_flat_darkh = flat_dark_times['high (dual-gain)'] == exptime[hmid_exp_i]
+                    if flatdark_present and (len(flat_dark_times['high (dual-gain)']) > 0):
+                        this_flat_darkh = flat_dark_times['high (dual-gain)'] == file_table['EXPTIME'][gain_flats][hmid_exp_i]
                         mid_flats['high (dual-gain)'] = flat_frames[hmid_exp_i].cds_frames[0,0] - flat_darks['high (dual-gain)'][this_flat_darkh]
-                        this_flat_darkl = flat_dark_times['low (dual-gain)'] == exptime[lmid_exp_i]
+                        this_flat_darkl = flat_dark_times['low (dual-gain)'] == file_table['EXPTIME'][gain_flats][lmid_exp_i]
                         mid_flats['low (dual-gain)'] = flat_frames[lmid_exp_i].cds_frames[0,1] - flat_darks['low (dual-gain)'][this_flat_darkl]
                     elif bias_present:
                         mid_flats['high (dual-gain)'] = flat_frames[hmid_exp_i].cds_frames[0,0] - med_bias_frames['high (dual-gain)']
@@ -544,8 +547,9 @@ def standard_analysis_products(dirname, **kwargs):
                     mid_exp_i = np.argmin(np.abs(whole_frame_means - 10000))
                     mid_flat_times[gain] = exptime[mid_exp_i]
                     mid_flat_voltages[gain] = led[mid_exp_i]
-                    if flatdark_present:
-                        this_flat_dark = flat_dark_times[gain] == exptime[mid_exp_i]
+                    if flatdark_present and (len(flat_dark_times[gain]) > 0):
+                        this_flat_dark = flat_dark_times[gain] == file_table['EXPTIME'][gain_flats][mid_exp_i]
+                        print(flat_dark_times[gain], file_table['EXPTIME'][gain_flats][mid_exp_i])
                         mid_flats[gain] = flat_frames[mid_exp_i].cds_frames[0] - flat_darks[gain][this_flat_dark]
                     elif bias_present:
                         mid_flats[gain] = flat_frames[mid_exp_i].cds_frames[0] - med_bias_frames[gain]
