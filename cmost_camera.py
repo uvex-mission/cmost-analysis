@@ -262,12 +262,12 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
                 print('Taking persistence test exposures (<1 min)...')
                 # First take 3x saturated exposures
                 set_gain('high')
-                cam.set_basename(basename+'_persistillum_'+str(voltage))
+                cam.set_basename(basename+'_persistillum_'+str(sat_voltage))
                 cam.key('LED='+str(sat_voltage)+'// LED voltage in Volts')
                 cam.setled(sat_voltage)
                 cam.expose(0,3,0)
                 # Then turn off LED and take further exposures
-                cam.set_basename(basename+'_persistdark_'+str(voltage))
+                cam.set_basename(basename+'_persistdark_'+str(sat_voltage))
                 cam.key('LED=.')
                 cam.setled(-0.1)
                 cam.expose(0,30,0)
