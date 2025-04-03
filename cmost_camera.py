@@ -63,10 +63,10 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
             # Define the output directory
             if line.startswith('IMDIR'):
                 data_dir = line.split('=')[1][:-1]
-                datestring = time.strftime('%Y%m%d', time.gmtime())
-                v = np.sum([datestring in d for d in os.listdir(data_dir)])
-                if v > 0: output_dir = data_dir+'/'+datestring+'_'+str(v)+'/'
-                else: output_dir = data_dir+'/'+datestring+'/'
+                folderstring = time.strftime('%Y%m%d', time.gmtime())+'_'+detid
+                v = np.sum([folderstring in d for d in os.listdir(data_dir)])
+                if v > 0: output_dir = data_dir+'/'+folderstring+'_'+str(v)+'/'
+                else: output_dir = data_dir+'/'+folderstring+'/'
     
     if output_dir:
         os.mkdir(output_dir)
@@ -265,6 +265,7 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
                 cam.set_basename(basename+'_persistillum_'+str(sat_voltage))
                 cam.key('LED='+str(sat_voltage)+'// LED voltage in Volts')
                 cam.setled(sat_voltage)
+                time.sleep(20)
                 cam.expose(0,3,0)
                 # Then turn off LED and take further exposures
                 cam.set_basename(basename+'_persistdark_'+str(sat_voltage))
@@ -297,7 +298,7 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
                     cam.key('EXPTIME=0//exposure time in seconds')
                     cam.expose(0,3,0)
                     for t in np.rint(np.logspace(0,2.3,10)):
-                        cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
+                        cam.key('EXPTIME='+str(int(t))+'//exposure time in seconds')
                         cam.expose(int(t),3,0)
                 
                 # Switch on LED
@@ -317,7 +318,7 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
                         # Loop through exposure times
                         # Two exposures per exposure time for PTC generation
                         for t in np.rint(np.logspace(0,2.1,10)):
-                            cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
+                            cam.key('EXPTIME='+str(int(t))+'//exposure time in seconds')
                             cam.expose(int(t),2,0)
                         print('Time elapsed: '+str(time.time() - start)+' s')
                     
@@ -347,7 +348,7 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
             
             set_gain(gain)
             cam.set_basename(basename+'_singleflat_'+gain+'_'+str(flatv))
-            cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
+            cam.key('EXPTIME='+str(int(t))+'//exposure time in seconds')
             cam.expose(int(t),20,0)
             print('Time elapsed: '+str(time.time() - start)+' s')
     
@@ -373,7 +374,7 @@ def setup_camera(camid,detid,output_dir=None):
     # Set filename base and naming scheme
     basename = camid+'_'+detid
     cam.set_basename(basename)
-    cam.__send_command('fitsnaming','date') # Confirm this command with Dave
+    cam.__send_command('fitsnaming','time') 
     
     # Start with LED forced off
     cam.setled(-0.1)
@@ -518,7 +519,7 @@ def take_guiding_exposure(t,gain,basename,boi_start=200,boi_size=10):
     cam.set_param('InitFrame',0) # Do not reset the frame
     set_gain(gain)
     cam.set_basename(basename)
-    cam.key('EXPTIME='+str(t*1000)+'//Exposure time in milliseconds')
+    cam.key('EXPTIME='+str(int(t*1000))+'//Exposure time in milliseconds')
     cam.expose(0,1,0) # Zero-length exposure since it's been exposing throughout the guiding
 
 '''
