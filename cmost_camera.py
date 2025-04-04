@@ -297,7 +297,7 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
                     cam.set_basename(basename+'_flatdark_'+g)
                     cam.key('EXPTIME=0//exposure time in seconds')
                     cam.expose(0,3,0)
-                    for t in np.rint(np.logspace(0,2.3,10)):
+                    for t in np.rint(np.logspace(0,2.1,10)):
                         cam.key('EXPTIME='+str(int(t))+'//exposure time in seconds')
                         cam.expose(int(t),3,0)
                 
@@ -374,7 +374,7 @@ def setup_camera(camid,detid,output_dir=None):
     # Set filename base and naming scheme
     basename = camid+'_'+detid
     cam.set_basename(basename)
-    cam.__send_command('fitsnaming','time') 
+    cam.__send_command('fitsnaming','time')
     
     # Start with LED forced off
     cam.setled(-0.1)
@@ -454,12 +454,13 @@ def get_ptc_setup(ledw):
     Assuming a log-spaced set of exposure times between 1 and 120s
     '''
     switch = { # Calibrated for HfO - setup as of Nov 2024
-        '255': [4.0, 7.0, 9.0, 12.0], #[4.5, 5.4, 6.2, 7.0],
-        '260': [4.55, 5.0, 7.5, 9.5], #[4.5, 4.6, 4.85, 5.1],
-        '285': [4.48, 4.8, 5.2, 5.5], #[4.35, 4.5, 4.6, 4.75],
-        '310': [3.8, 4.2, 5.4, 6.6], #[3.7, 3.9, 4.1, 4.3],
-        '340': [3.5, 4.0, 4.8, 5.6], #[3.42, 3.56, 3.70, 3.86],
-        '800': [1.55, 1.62, 1.68, 1.75] #[1.5, 1.55, 1.6, 1.65]
+        '255': [4.0, 7.0, 9.0, 12.0],
+        '260': [4.55, 5.0, 7.5, 9.5],
+        '285': [4.48, 4.8, 5.2, 5.5],
+        '310': [3.8, 4.2, 5.4, 6.6],
+        '340': [3.5, 4.0, 4.8, 5.6],
+        '800': [1.55, 1.62, 1.68, 1.75],
+        '800int': [1.62,1.68,1.75,1.82] # Updated scaling for internal 800 LED
     }
     
     return switch.get(ledw,None)
@@ -473,7 +474,8 @@ def get_sat_v(ledw):
         '285': 7.0,
         '310': 8.0,
         '340': 7.0,
-        '800': 2.2
+        '800': 2.2,
+        '800int': 2.5
     }
     
     return switch.get(ledw,None)
@@ -601,8 +603,8 @@ Usage:
         else: ledw = sys.argv[5]
         
         # Check LED wavelength is one we expect
-        if ledw not in ['255', '260', '285', '310', '340', '800', 'None']:
-            print('LED wavelength options: 255, 260, 285, 310, 340, 800, None. If None, no flats will be taken. Make sure the correct LED is selected on the camera before running this script!')
+        if ledw not in ['255', '260', '285', '310', '340', '800', '800int', 'None']:
+            print('LED wavelength options: 255, 260, 285, 310, 340, 800, 800int, None. If None, no flats will be taken. Make sure the correct LED is selected on the camera before running this script!')
             exit()
         
         standard_analysis_exposures(camid,detid,config_file,ledw=ledw)

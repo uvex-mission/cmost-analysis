@@ -399,13 +399,13 @@ def standard_analysis_products(dirname, **kwargs):
             persist_dark_frames = pd.cds_frames
             
         if pd.frame_time > 0:
-            persist_times = np.arange(len(persist_dark_frames_e)) * pd.frame_time/1000.
+            persist_times = np.arange(len(persist_dark_frames)) * pd.frame_time/1000.
             persist_tu = 's'
         elif 'high' in read_time:
-            persist_times = np.arange(len(persist_dark_frames_e)) * read_time['high']
+            persist_times = np.arange(len(persist_dark_frames)) * read_time['high']
             persist_tu = 's'
         else:
-            persist_times = np.arange(len(persist_dark_frames_e))
+            persist_times = np.arange(len(persist_dark_frames))
             persist_tu = 'Frame number'
 
 
@@ -509,7 +509,14 @@ def standard_analysis_products(dirname, **kwargs):
 
                     mid_flat_times['high (dual-gain)'], mid_flat_times['low (dual-gain)'] = exptime[hmid_exp_i], exptime[lmid_exp_i]
                     mid_flat_voltages['high (dual-gain)'], mid_flat_voltages['low (dual-gain)'] = led[hmid_exp_i], led[lmid_exp_i]
+                    
                     if flatdark_present and (len(flat_dark_times['high (dual-gain)']) > 0):
+                        this_flat_darkh = flat_dark_times['high (dual-gain)'] == file_table['EXPTIME'][gain_flats][hmid_exp_i]
+                        this_flat_darkl = flat_dark_times['low (dual-gain)'] == file_table['EXPTIME'][gain_flats][lmid_exp_i]
+                    else:
+                        this_flat_darkh, this_flat_darkl = 0, 0
+                    
+                    if (np.sum(this_flat_darkh) > 0) and (np.sum(this_flat_darkl) > 0):
                         this_flat_darkh = flat_dark_times['high (dual-gain)'] == file_table['EXPTIME'][gain_flats][hmid_exp_i]
                         mid_flats['high (dual-gain)'] = flat_frames[hmid_exp_i].cds_frames[0,0] - flat_darks['high (dual-gain)'][this_flat_darkh]
                         this_flat_darkl = flat_dark_times['low (dual-gain)'] == file_table['EXPTIME'][gain_flats][lmid_exp_i]
@@ -549,7 +556,9 @@ def standard_analysis_products(dirname, **kwargs):
                     mid_flat_voltages[gain] = led[mid_exp_i]
                     if flatdark_present and (len(flat_dark_times[gain]) > 0):
                         this_flat_dark = flat_dark_times[gain] == file_table['EXPTIME'][gain_flats][mid_exp_i]
-                        print(flat_dark_times[gain], file_table['EXPTIME'][gain_flats][mid_exp_i])
+                    else:
+                        this_flat_dark = 0
+                    if np.sum(this_flat_dark) > 1:
                         mid_flats[gain] = flat_frames[mid_exp_i].cds_frames[0] - flat_darks[gain][this_flat_dark]
                     elif bias_present:
                         mid_flats[gain] = flat_frames[mid_exp_i].cds_frames[0] - med_bias_frames[gain]
@@ -575,7 +584,7 @@ def standard_analysis_products(dirname, **kwargs):
         for g in med_sig:
             # Determine the shot noise dominated region of the PTC
             # Defined as unsaturated and above the noise-floor-dominated region
-            rough_sat_level = np.minimum(max(med_sig[g]) - 5000, 10000) # We expect saturation to be well above 10k but want to handle other cases
+            rough_sat_level = np.maximum(max(med_sig[g]) - 5000, 10000) # We expect saturation to be well above 10k but want to handle other cases
             valid = (var[g] > 0) & (med_sig[g] > 100) & (med_sig[g] < rough_sat_level)
             
             if np.sum(valid) > 0:
@@ -909,7 +918,7 @@ def standard_analysis_products(dirname, **kwargs):
                 if i < len(noise_spectrum)-1: axs[i].get_xaxis().set_visible(False)
                 axs[i].set_xlabel('Frequency (Hz)')
                 if i == 0:
-                    axs[i].set_ylabel(r'Noise Density (V / Hz$^2$)')
+                    axs[i].set_ylabel(r'Noise Density (V / Hz$^{1/2}$)')
                     axs[i].legend(fontsize=10,ncols=4)
                 axs[i].text(0.05,0.1,f'Pixel: {noise_pix[i]}',transform=axs[i].transAxes)
             for a in axs[np.minimum(len(noise_spectrum),3):]:
@@ -957,8 +966,12 @@ def standard_analysis_products(dirname, **kwargs):
             
             # Output a frame image and histograms
             ax1 = plt.subplot2grid((4,2), (0,0))
-            darkax = [plt.subplot2grid((4,2), (0,1)), plt.subplot2grid((4,2), (1,0)), plt.subplot2grid((4,2), (1,1))]
-            ax5 = plt.subplot2grid((4,1), (2,0))
+            darkax = [plt.subplot2grid((4,2), (0,1)),
+                      plt.subplot2grid((4,2), (1,0)),
+                      plt.subplot2grid((4,2), (1,1)),
+                      plt.subplot2grid((4,2), (2,0)),
+                      plt.subplot2grid((4,2), (2,1))]
+            ax7 = plt.subplot2grid((4,1), (3,0))
             
             # Median saturated frame
             plt.sca(ax1)
@@ -971,15 +984,15 @@ def standard_analysis_products(dirname, **kwargs):
                 plt.sca(ax)
                 plt.title(f'Post-saturated dark {i+1}')
                 imdata = persist_dark_frames_e[i]
-                # Set scaling to match the first frame in sequence
-                if i == 0: vmin, vmax = np.percentile(imdata,0.03), np.percentile(imdata,99.7)
+                
+                vmin, vmax = np.percentile(imdata,0.03), np.percentile(imdata,99.7)
                 plt.imshow(imdata, vmin=vmin, vmax=vmax)
                 plt.colorbar(label='e-', shrink=0.9)
             
             # Plot of dark median over time
             dark_medians = np.nanmedian(persist_dark_frames_e, axis=(1,2))
             
-            plt.sca(ax5)
+            plt.sca(ax7)
             plt.plot(persist_times, dark_medians)
             plt.xlabel(f'Time ({persist_tu})')
             plt.ylabel('Mean Signal (e-)')
@@ -1044,7 +1057,8 @@ def standard_analysis_products(dirname, **kwargs):
                     plt.scatter(exposure_times, means, marker='x', label=f'{g}', color=gain_color[g])
                     
                     # Fit line to the set of means above 10 and less than the rough saturation level
-                    for_fitting_lin = (means > 10) & (means < (max(med_sig[g]) - 5000))
+                    rough_sat_level = np.maximum(max(med_sig[g]) - 5000, 10000)
+                    for_fitting_lin = (means > 10) & (means < rough_sat_level)
                     if np.sum(for_fitting_lin) > 1:
                         model_fit_lin, mask_lin = fit_or(model, exposure_times[for_fitting_lin], means[for_fitting_lin], maxiter=100)
                         plt.plot(np.logspace(-0.3,2.4),model_fit_lin(np.logspace(-0.3,2.4)), ls='--', color=gain_line_color[g])

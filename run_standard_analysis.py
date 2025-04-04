@@ -4,9 +4,10 @@ import cmost_camera
 
 # Define camera setup here
 camid = 'cmost'                 # Camera name i.e. 'cmost' or 'cmostjpl'
-detid = 'DIE06'                 # Device name (see Detector Manifest)
-ledw = '800'                    # LED wavelength in nm
-# Supported options are: '255', '260', '285', '310', '340', '800', 'None'
+detid = 'DIE103'                # Device name (see Detector Manifest)
+ledw = '800int'                 # LED wavelength in nm
+# Supported options are: '255', '260', '285', '310', '340', '800', '800int', 'None'
+# (there are two 800nm options, 800/800int for extrenal/internal LEDs)
 config_filepath = '/home/user/CMOST/cmost1k1k.cfg' # Absolute path to CameraD config file
 
 # Define which exposures to take here (time for a 1k x 1k detector)
