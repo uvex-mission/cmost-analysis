@@ -30,10 +30,10 @@ def dwelltest(camid,detid):
     cam.close()
 
 
-def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', singleframe=True, noise=True, bias=True, longdark=True, opdark=True, persist=True, flat=True, singleflat=False, flatv=-1):
+def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', singleframe=True, noise=True, bias=True, longdark=True, opdark=False, persist=True, flat=True, singleflat=False, flatv=-1):
     '''
     Function to take all exposures required for standard analysis
-    to be performed on all chips. By default takes all exposure sets,
+    to be performed on all chips. By default takes all exposure sets marked True,
     but this can be modified depending on the flags that are set. Each
     exposure set can be run independently.
     
