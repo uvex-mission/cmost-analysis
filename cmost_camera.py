@@ -9,6 +9,7 @@
     python cmost_camera.py EXPOSURESET CAMID DETID LED
     
     For a more tailored exposure set, call standard_analysis_exposures() from a script
+    A helpful wrapper is available in run_standard_analysis.py
 '''
 from __future__ import print_function
 import os, sys, shutil
@@ -29,21 +30,24 @@ def dwelltest(camid,detid):
     cam.close()
 
 
-def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', singleframe=True, bias=True, longdark=True, opdark=True, flat=True, singleflat=False, flatv=-1):
+def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', singleframe=True, noise=True, bias=True, longdark=True, opdark=False, persist=True, flat=True, singleflat=False, flatv=-1):
     '''
     Function to take all exposures required for standard analysis
-    to be performed on all chips. By default takes all exposure sets,
+    to be performed on all chips. By default takes all exposure sets marked True,
     but this can be modified depending on the flags that are set. Each
     exposure set can be run independently.
     
     - singleframe: A minimum-length single frame readout in each gain mode,
             for estimating the readout time
+    - noise: A noise spectrum for 3 randomly selected pixels
     - bias: 100x minimum-length exposures in each gain mode, for bias frame
             and read noise calculation
     - longdark: 3x 3-hour dark exposures in dual-gain mode, for dark current
             measurement and glow characterization
     - opdark: 9 sets of exposures in FUV mode (9+900s), NUV mode (3+300s) and
             NUV guiding mode (3+300s with 10Hz guiding)
+    - persist: 3x high-illumination minimum-length exposures followed by 30 dark
+            minimum-length exposures, for persistence measurement
     - flat: Sets of flat frames for PTC generation (requires ledw to be set)
     - singleflat: 20x flat frame in a particular configuration (requires ledw and flatv to be set)
     '''
@@ -59,10 +63,10 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
             # Define the output directory
             if line.startswith('IMDIR'):
                 data_dir = line.split('=')[1][:-1]
-                datestring = time.strftime('%Y%m%d', time.gmtime())
-                v = np.sum([datestring in d for d in os.listdir(data_dir)])
-                if v > 0: output_dir = data_dir+'/'+datestring+'_'+str(v)+'/'
-                else: output_dir = data_dir+'/'+datestring+'/'
+                folderstring = time.strftime('%Y%m%d', time.gmtime())+'_'+detid
+                v = np.sum([folderstring in d for d in os.listdir(data_dir)])
+                if v > 0: output_dir = data_dir+'/'+folderstring+'_'+str(v)+'/'
+                else: output_dir = data_dir+'/'+folderstring+'/'
     
     if output_dir:
         os.mkdir(output_dir)
@@ -117,6 +121,23 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
         notes_file = open(notes_filepath,'a')
         notes_file.write(time_notes)
         notes_file.close()
+        print('Time elapsed: '+str(time.time() - start)+' s')
+        
+    # Noise spectrum for three random pixels
+    if noise:
+        print('Getting noise spectra (<1 min)...')
+        cam.set_mode('NOISESPECTRUM')
+        cam.set_basename(basename+'_noisespec')
+        for i in range(3):
+            # Select random pixel within first 256 x 1k pixels
+            # for compatibility with multiple device sizes
+            # This pixel in each channel will be read out
+            xpix, ypix = np.random.randint(0,255), np.random.randint(0,1023)
+            cam.key('XPIX='+str(xpix)+'//Pixel X position')
+            cam.key('YPIX='+str(ypix)+'//Pixel Y position')
+            cam.set_param('Xpix',xpix)
+            cam.set_param('Ypix',ypix)
+            cam.expose(0,1,0)
         print('Time elapsed: '+str(time.time() - start)+' s')
 
     # Minimum-length dark frames - 100 frames for each gain mode
@@ -228,6 +249,31 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
         cam.key('LONGEXPO=1// 1|0 means exposure in s|ms')
         cam.set_param('InitFrame',1) # Apply initial reset frame but don't capture resulting image
         cam.key('NORESET=1//Reset frame has been removed')
+        
+    # Persistence test by taking saturated frames followed by darks
+    if persist:
+        if ledw == 'None':
+            print('No LED wavelength specified, skipping persistence test')
+        else:
+            # Get the ideal saturation voltage for this LED
+            sat_voltage = get_sat_v(ledw)
+            
+            if sat_voltage is not None:
+                print('Taking persistence test exposures (<1 min)...')
+                # First take 3x saturated exposures
+                set_gain('high')
+                cam.set_basename(basename+'_persistillum_'+str(sat_voltage))
+                cam.key('LED='+str(sat_voltage)+'// LED voltage in Volts')
+                cam.setled(sat_voltage)
+                time.sleep(20)
+                cam.expose(0,3,0)
+                # Then turn off LED and take further exposures
+                cam.set_basename(basename+'_persistdark_'+str(sat_voltage))
+                cam.key('LED=.')
+                cam.setled(-0.1)
+                cam.expose(0,30,0)
+            else:
+                print('No saturation voltage set found for this LED, skipping persistence test')
     
     # Illuminated flat frame sequence for PTC
     if flat:
@@ -235,15 +281,31 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
             print('No LED wavelength specified, skipping flats')
         else:
             # Get the ideal voltage range for this LED
-            cam.key('LEDWAVE='+str(ledw)+'// LED wavelength in nm')
             voltages = get_ptc_setup(ledw)
             
             if voltages is not None:
+                print('Taking illuminated flat field exposures (~2.8 hours)...')
+            
+                # Set exposure times between 1 and ~120s
+                exptimes = np.rint(np.logspace(0,2.1,10))
+            
+                # First take darks for each exposure time length
+                # 3 exposures each for a median
+                for g in ['high','low','hdr']:
+                    print('Flat darks for '+g+' gain')
+                    set_gain(g)
+                    cam.set_basename(basename+'_flatdark_'+g)
+                    cam.key('EXPTIME=0//exposure time in seconds')
+                    cam.expose(0,3,0)
+                    for t in np.rint(np.logspace(0,2.1,10)):
+                        cam.key('EXPTIME='+str(int(t))+'//exposure time in seconds')
+                        cam.expose(int(t),3,0)
+                
                 # Switch on LED
-                print('Taking illuminated flat field exposures (~3 hours)...')
+                cam.key('LEDWAVE='+str(ledw)+'// LED wavelength in nm')
                 for voltage in voltages:
-                    cam.setled(voltage)
                     cam.key('LED='+str(voltage)+'// LED voltage in Volts')
+                    cam.setled(voltage)
                     time.sleep(60)
                     
                     for g in ['high','low','hdr']:
@@ -253,10 +315,10 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
                         cam.set_basename(basename+'_flat_'+g+'_'+str(voltage))
                         cam.key('EXPTIME=0//exposure time in seconds')
                         cam.expose(0,2,0)
-                        # Loop through exposure times between 1 and ~200s
+                        # Loop through exposure times
                         # Two exposures per exposure time for PTC generation
-                        for t in np.rint(np.logspace(0,2.3,10)):
-                            cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
+                        for t in np.rint(np.logspace(0,2.1,10)):
+                            cam.key('EXPTIME='+str(int(t))+'//exposure time in seconds')
                             cam.expose(int(t),2,0)
                         print('Time elapsed: '+str(time.time() - start)+' s')
                     
@@ -286,7 +348,7 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
             
             set_gain(gain)
             cam.set_basename(basename+'_singleflat_'+gain+'_'+str(flatv))
-            cam.key('EXPTIME='+str(t)+'//exposure time in seconds')
+            cam.key('EXPTIME='+str(int(t))+'//exposure time in seconds')
             cam.expose(int(t),20,0)
             print('Time elapsed: '+str(time.time() - start)+' s')
     
@@ -309,9 +371,10 @@ def setup_camera(camid,detid,output_dir=None):
     cam.key('CAMERAID='+camid+'//Camera ID')
     cam.key('DETID='+detid+'//Device ID')
     
-    # Set filename base
+    # Set filename base and naming scheme
     basename = camid+'_'+detid
     cam.set_basename(basename)
+    cam.__send_command('fitsnaming','time')
     
     # Start with LED forced off
     cam.setled(-0.1)
@@ -388,16 +451,31 @@ def dump_info(acf_file, output_dir):
 def get_ptc_setup(ledw):
     '''
     Get an ideal set of voltages for generating a PTC for the given LED
-    Assuming a log-spaced set of exposure times between 1 and 200s
+    Assuming a log-spaced set of exposure times between 1 and 120s
     '''
     switch = { # Calibrated for HfO - setup as of Nov 2024
-        '255': [4.0, 7.0, 9.0, 12.0], #[4.5, 5.4, 6.2, 7.0],
-        '260': [4.55, 5.0, 7.5, 9.5], #[4.5, 4.6, 4.85, 5.1],
-        '285': [4.48, 4.8, 5.2, 5.5], #[4.35, 4.5, 4.6, 4.75],
-        '310': [3.8, 4.2, 5.4, 6.6], #[3.7, 3.9, 4.1, 4.3],
-        '340': [3.5, 4.0, 4.8, 5.6], #[3.42, 3.56, 3.70, 3.86],
-#        '372': [],
-        '800': [1.55, 1.62, 1.68, 1.75] #[1.5, 1.55, 1.6, 1.65]
+        '255': [4.0, 7.0, 9.0, 12.0],
+        '260': [4.55, 5.0, 7.5, 9.5],
+        '285': [4.48, 4.8, 5.2, 5.5],
+        '310': [3.8, 4.2, 5.4, 6.6],
+        '340': [3.5, 4.0, 4.8, 5.6],
+        '800': [1.55, 1.62, 1.68, 1.75],
+        '800int': [1.62,1.68,1.75,1.82] # Updated scaling for internal 800 LED
+    }
+    
+    return switch.get(ledw,None)
+
+def get_sat_v(ledw):
+    '''
+    Get a voltage that will saturate the detector in a minimum-length high-gain exposure
+    Not possible for all LEDs, currently
+    '''
+    switch = {
+        '285': 7.0,
+        '310': 8.0,
+        '340': 7.0,
+        '800': 2.2,
+        '800int': 2.5
     }
     
     return switch.get(ledw,None)
@@ -443,7 +521,7 @@ def take_guiding_exposure(t,gain,basename,boi_start=200,boi_size=10):
     cam.set_param('InitFrame',0) # Do not reset the frame
     set_gain(gain)
     cam.set_basename(basename)
-    cam.key('EXPTIME='+str(t*1000)+'//Exposure time in milliseconds')
+    cam.key('EXPTIME='+str(int(t*1000))+'//Exposure time in milliseconds')
     cam.expose(0,1,0) # Zero-length exposure since it's been exposing throughout the guiding
 
 '''
@@ -514,7 +592,7 @@ Usage:
 
     # Pick the exposure set to execute
     if sys.argv[1] == 'standard':
-        print('Taking standard exposure set (~18 hours)')
+        print('Taking standard exposure set (~16.5 hours)')
         if len(sys.argv) < 3: camid = raw_input('Camera ID (cmost or cmostjpl): ')
         else: camid = sys.argv[2]
         if len(sys.argv) < 4: detid = raw_input('Detector ID: ')
@@ -525,8 +603,8 @@ Usage:
         else: ledw = sys.argv[5]
         
         # Check LED wavelength is one we expect
-        if ledw not in ['255', '260', '285', '310', '340', '372', '800', 'None']:
-            print('LED wavelength options: 255, 260, 285, 310, 340, 372, 800, None. If None, no flats will be taken. Make sure the correct LED is selected on the camera before running this script!')
+        if ledw not in ['255', '260', '285', '310', '340', '800', '800int', 'None']:
+            print('LED wavelength options: 255, 260, 285, 310, 340, 800, 800int, None. If None, no flats will be taken. Make sure the correct LED is selected on the camera before running this script!')
             exit()
         
         standard_analysis_exposures(camid,detid,config_file,ledw=ledw)
