@@ -314,12 +314,12 @@ def standard_analysis_exposures(camid, detid, config_filepath, ledw='None', sing
                         # Min-length exposures
                         cam.set_basename(basename+'_flat_'+g+'_'+str(voltage))
                         cam.key('EXPTIME=0//exposure time in seconds')
-                        cam.expose(0,2,0)
+                        cam.expose(0,3,0)
                         # Loop through exposure times
                         # Two exposures per exposure time for PTC generation
                         for t in np.rint(np.logspace(0,2.1,10)):
                             cam.key('EXPTIME='+str(int(t))+'//exposure time in seconds')
-                            cam.expose(int(t),2,0)
+                            cam.expose(int(t),3,0)
                         print('Time elapsed: '+str(time.time() - start)+' s')
                     
                     # Get temperature again

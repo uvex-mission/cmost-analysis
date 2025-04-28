@@ -113,18 +113,18 @@ class Exposure():
         A Numpy array of 2-d frames, containing CDS frames that have been binned up by a factor supplied
         by the user (default 4)
     '''
-    def __init__(self, filepath='', custom_keys=[], subframe=None, cleanup=True, graycode=False):
+    def __init__(self, filepath='', custom_keys=[], subframe=None, cleanup=True, graycode=False, ignore_frame=0):
         self.filepath = filepath
     
         if self.filepath != '':
             # Read image at provided filepath
-            self.read_fits(self.filepath, custom_keys, graycode, subframe)
+            self.read_fits(self.filepath, custom_keys, graycode, subframe, ignore_frame)
         
         # Once everything is loaded delete what's no longer needed
         if cleanup:
             self.cleanup_frames()
 
-    def read_fits(self, filepath, custom_keys, graycode, subframe):
+    def read_fits(self, filepath, custom_keys, graycode, subframe, ignore_frame):
         '''
         Read FITS image and populate attributes
         
@@ -185,6 +185,10 @@ class Exposure():
             else:
                 # Just ignore 0th Extension
                 ignore_ext = 1
+            
+            # Have we specified ignoring an actual data frame? Add that to the number of ignored extensions
+            # This will ignore frames from the beginning onwards
+            ignore_ext += ignore_frame
         else:
             # Image is stored in the 0th Extension
             # For frames not taken directly from the camera

@@ -112,7 +112,7 @@ def standard_analysis_products(dirname, **kwargs):
     read_noise_e, dark_current_e, well_depth_e = {}, {}, {}
     noise_bad, dark_bad, flat_bad = {}, {}, {}
     noise_percent_bad, dark_percent_bad, flat_percent_bad = {}, {}, {}
-    gain_modes = ['high (dual-gain)','low (dual-gain)','high','low']
+    gain_modes = ['low', 'low (dual-gain)','high','high (dual-gain)']
     # A nominal gain value for converting ADU to electrons in case PTC gives bad values
     nom_gain = {'high (dual-gain)': 1.2, 'low (dual-gain)': 8.5, 'high': 1.2, 'low': 8.5}
     nom_read_noise = {'high (dual-gain)': 1.75, 'low (dual-gain)': 1.18, 'high': 1.75, 'low': 1.18}
@@ -448,7 +448,12 @@ def standard_analysis_products(dirname, **kwargs):
             if np.sum(gain_flats) > 0:
                 # Load flat frame files
                 flat_files = file_table['FILEPATH'][gain_flats]
-                flat_frames = load_by_filepath(file_table['FILEPATH'][gain_flats], **kwargs)
+                if file_table['NUM_EXP'][gain_flats][0] == 3:
+                    # We took 3 data frames because we don't trust the first
+                    # So ignore 1 initial frame
+                    flat_frames = load_by_filepath(file_table['FILEPATH'][gain_flats], ignore_frame=1, **kwargs)
+                else:
+                    flat_frames = load_by_filepath(file_table['FILEPATH'][gain_flats], **kwargs)
                 exptime = file_table['EXPTIME'][gain_flats]
                 if max(file_table['FRAMTIME'][gain_flats] > 0): exptime = exptime + file_table['FRAMTIME'][gain_flats]/1000.
                 elif gain in read_time: exptime = exptime + read_time[gain]
@@ -564,7 +569,7 @@ def standard_analysis_products(dirname, **kwargs):
                         mid_flats[gain] = flat_frames[mid_exp_i].cds_frames[0] - med_bias_frames[gain]
                     else:
                         mid_flats[gain] = flat_frames[mid_exp_i].cds_frames[0]
-                    mid_flat_comment[gain] = f'Illuminated {exptime[mid_exp_i]:.1f}s exposure in {gain} gain mode, LED at {led[mid_exp_i]} V{bias_note}'
+                    mid_flat_comment[gain] = f'Illuminated {exptime[mid_exp_i]:.1f}s exposure in {gain} gain mode; LED at {led[mid_exp_i]} V{bias_note}'
         
         # Write the mid flat frames to file
         flat_outpath = write_fits_image(mid_flats, 'sample flat frame', mid_flat_comment,
@@ -848,30 +853,35 @@ def standard_analysis_products(dirname, **kwargs):
         # Bias plots
         if bias_present:
             # Now create bias and noise map summary pages
-            for g in med_bias_frames_e:
-                # Plot bias frame
-                mmin, mmax = min(med_bias_frames_e[g].flatten()), max(med_bias_frames_e[g].flatten())
-                
-                summary_text = f'Gain mode: {g}\n'
-                summary_text += '\n'.join(bias_comment[g].split('; '))+'\n'
-                summary_text += f'Min median pixel value: {mmin:.1f} e-; max median pixel value: {mmax:.1f} e- \n'
-                
-                # Create a standard histogram page and save it to the pdf
-                hist_page(pdf, med_bias_frames_e[g], f'Bias frames - gain: {g}', summary_text, precision=use_gain[g])
-                
-                # Also plot read noise map and histogram
-                nmin, nmax = min(noise_map_e[g].flatten()), max(noise_map_e[g].flatten())
-                
-                summary_text = f'Gain mode: {g}\n'
-                summary_text += '\n'.join(bias_comment[g].split('; '))+'\n'
-                summary_text += f'Min noise value: {nmin:.1f} e-; max noise value: {nmax:.1f} e- \n'
-                summary_text += f'Read noise (RMS): {read_noise_e[g]:.2f} e-\n'
-                if (g == 'high') | (g == 'high (dual-gain)'):
-                    summary_text += f'Percentage above {noise_bad_thresh} e-: {noise_percent_bad[g]:.2f} %\n'
-                    hist_page(pdf, noise_map_e[g], f'Noise map - gain: {g}', summary_text, precision=0.1,
-                              unit='Read Noise (e-)', vlines=[noise_bad_thresh])
-                else:
-                    hist_page(pdf, noise_map_e[g], f'Noise map - gain: {g}', summary_text, precision=0.1, unit='Read Noise (e-)')
+            # Plot bias frames
+            for g in gain_modes:
+                if g in med_bias_frames_e:
+                    # Plot bias frame
+                    mmin, mmax = min(med_bias_frames_e[g].flatten()), max(med_bias_frames_e[g].flatten())
+                    
+                    summary_text = f'Gain mode: {g}\n'
+                    summary_text += '\n'.join(bias_comment[g].split('; '))+'\n'
+                    summary_text += f'Min median pixel value: {mmin:.1f} e-; max median pixel value: {mmax:.1f} e- \n'
+                    
+                    # Create a standard histogram page and save it to the pdf
+                    hist_page(pdf, med_bias_frames_e[g], f'Bias frames - gain: {g}', summary_text, precision=use_gain[g])
+            
+            # Plot noise maps
+            for g in gain_modes:
+                if g in noise_map_e:
+                    # Plot read noise map and histogram
+                    nmin, nmax = min(noise_map_e[g].flatten()), max(noise_map_e[g].flatten())
+                    
+                    summary_text = f'Gain mode: {g}\n'
+                    summary_text += '\n'.join(bias_comment[g].split('; '))+'\n'
+                    summary_text += f'Min noise value: {nmin:.1f} e-; max noise value: {nmax:.1f} e- \n'
+                    summary_text += f'Read noise (RMS): {read_noise_e[g]:.2f} e-\n'
+                    if (g == 'high') | (g == 'high (dual-gain)'):
+                        summary_text += f'Percentage above {noise_bad_thresh} e-: {noise_percent_bad[g]:.2f} %\n'
+                        hist_page(pdf, noise_map_e[g], f'Noise map - gain: {g}', summary_text, precision=0.1,
+                                  unit='Read Noise (e-)', vlines=[noise_bad_thresh])
+                    else:
+                        hist_page(pdf, noise_map_e[g], f'Noise map - gain: {g}', summary_text, precision=0.1, unit='Read Noise (e-)')
             
             # Read noise summary page
             fig = plt.figure(figsize=[8.5,11],dpi=300)
@@ -928,36 +938,37 @@ def standard_analysis_products(dirname, **kwargs):
 
         # Long darks
         if longdark_present:
-            for g in longdark_frames_e:
-                # Plot long dark frames
-                frame = longdark_frames_e[g]
-                dmin, dmax, dmedian, dmean = min(frame.flatten()), max(frame.flatten()), np.median(frame), np.mean(frame)
-                
-                if 'subframe' not in kwargs:
-                    # Boxcar smooth for plotting and histogram, if not looking at a subframe
-                    smoothed_dark = convolve(frame, Box2DKernel(5))
-                    smoothed_txt = 'Frame is boxcar-smoothed with width=5 pixels\n'
-                    plot_dark = smoothed_dark
-                else:
-                    smoothed_txt = ''
-                    plot_dark = frame
-                
-                # Create a standard histogram page and save it to the pdf
-                summary_text = f'Frame: {g} long dark\n'
-                summary_text += '\n'.join(longdark_comment[g].split('; '))+f'\n{smoothed_txt}'
-                summary_text += f'Min median pixel value: {dmin:.4f} e-/s; max median pixel value: {dmax:.4f} e-/s \n'
-                summary_text += f'Median pixel value: {dmedian:.4f} e-/s; mean pixel value: {dmean:.4f} e-/s\n'
-                
-                # Mark the read noise level as well as the bad threshold for high-gain
-                read_noise_level = read_noise_e[g] / longdark_exp_time
+            for g in gain_modes:
+                if g in longdark_frames_e:
+                    # Plot long dark frames
+                    frame = longdark_frames_e[g]
+                    dmin, dmax, dmedian, dmean = min(frame.flatten()), max(frame.flatten()), np.median(frame), np.mean(frame)
+                    
+                    if 'subframe' not in kwargs:
+                        # Boxcar smooth for plotting and histogram, if not looking at a subframe
+                        smoothed_dark = convolve(frame, Box2DKernel(5))
+                        smoothed_txt = 'Frame is boxcar-smoothed with width=5 pixels\n'
+                        plot_dark = smoothed_dark
+                    else:
+                        smoothed_txt = ''
+                        plot_dark = frame
+                    
+                    # Create a standard histogram page and save it to the pdf
+                    summary_text = f'Frame: {g} long dark\n'
+                    summary_text += '\n'.join(longdark_comment[g].split('; '))+f'\n{smoothed_txt}'
+                    summary_text += f'Min median pixel value: {dmin:.4f} e-/s; max median pixel value: {dmax:.4f} e-/s \n'
+                    summary_text += f'Median pixel value: {dmedian:.4f} e-/s; mean pixel value: {dmean:.4f} e-/s\n'
+                    
+                    # Mark the read noise level as well as the bad threshold for high-gain
+                    read_noise_level = read_noise_e[g] / longdark_exp_time
 
-                prec = (use_gain[g] / longdark_exp_time) * 5
-                if (g == 'high') | (g == 'high (dual-gain)'):
-                    summary_text += f'Percentage above {dark_bad_thresh} e-/s: {dark_percent_bad[g]:.2f} %; 99% percentile: {dark_current_e[g]:.4f} e-/s\n'
-                    hist_page(pdf, plot_dark, f'Long darks - {g} frame', summary_text, unit='e-/s', precision=prec,
-                              contours=[dark_bad_thresh], vlines=[dark_bad_thresh, read_noise_level])
-                else:
-                    hist_page(pdf, plot_dark, f'Long darks - {g} frame', summary_text, unit='e-/s', precision=prec, vlines=[read_noise_level])
+                    prec = (use_gain[g] / longdark_exp_time) * 5
+                    if (g == 'high') | (g == 'high (dual-gain)'):
+                        summary_text += f'Percentage above {dark_bad_thresh} e-/s: {dark_percent_bad[g]:.2f} %; 99% percentile: {dark_current_e[g]:.4f} e-/s\n'
+                        hist_page(pdf, plot_dark, f'Long darks - {g} frame', summary_text, unit='e-/s', precision=prec,
+                                  contours=[dark_bad_thresh], vlines=[dark_bad_thresh, read_noise_level])
+                    else:
+                        hist_page(pdf, plot_dark, f'Long darks - {g} frame', summary_text, unit='e-/s', precision=prec, vlines=[read_noise_level])
 
         # Persistence test
         if persist_present:
@@ -1004,20 +1015,21 @@ def standard_analysis_products(dirname, **kwargs):
         # Flats, linearity and PTCs
         if flat_present:
             # Plot mid-range flats
-            for g in mid_flats_e:
-                flat = mid_flats_e[g]
-                mmin, mmax, mmedian, mmean = min(flat.flatten()), max(flat.flatten()), np.median(flat), np.mean(flat)
-                
-                if flatdark_present: summary_text = f'Gain mode: {g}, equal-length dark subtracted\n'
-                else: summary_text = f'Gain mode: {g}{bias_note}\n'
-                summary_text += '\n'.join(mid_flat_comment[g].split('; '))+'\n'
-                #summary_text += f'Illuminated {mid_flat_times[g]:.1f}s exposure; LED at {mid_flat_voltages[g]} V\n'
-                summary_text += f'Min pixel value: {mmin:.1f} e-; max pixel value: {mmax:.1f} e- \n'
-                summary_text += f'Median pixel value: {mmedian:.1f} e-; mean pixel value: {mmean:.1f} e-\n'
-                summary_text += f'Percentage below {flat_bad_thresh[g]:.1f} e-/s (5-sigma below mean): {flat_percent_bad[g]:.2f} %\n'
-                
-                # Create a standard histogram page and save it to the pdf
-                hist_page(pdf, flat, f'Mid-range flat frame - gain: {g}', summary_text, precision=min([50,mmax/50]))
+            for g in gain_modes:
+                if g in mid_flats_e:
+                    flat = mid_flats_e[g]
+                    mmin, mmax, mmedian, mmean = min(flat.flatten()), max(flat.flatten()), np.median(flat), np.mean(flat)
+                    
+                    if flatdark_present: summary_text = f'Gain mode: {g}, equal-length dark subtracted\n'
+                    else: summary_text = f'Gain mode: {g}{bias_note}\n'
+                    summary_text += '\n'.join(mid_flat_comment[g].split('; '))+'\n'
+                    #summary_text += f'Illuminated {mid_flat_times[g]:.1f}s exposure; LED at {mid_flat_voltages[g]} V\n'
+                    summary_text += f'Min pixel value: {mmin:.1f} e-; max pixel value: {mmax:.1f} e- \n'
+                    summary_text += f'Median pixel value: {mmedian:.1f} e-; mean pixel value: {mmean:.1f} e-\n'
+                    summary_text += f'Percentage below {flat_bad_thresh[g]:.1f} e-/s (5-sigma below mean): {flat_percent_bad[g]:.2f} %\n'
+                    
+                    # Create a standard histogram page and save it to the pdf
+                    hist_page(pdf, flat, f'Mid-range flat frame - gain: {g}', summary_text, precision=min([50,mmax/50]))
 
             # Linearity and PTC plots
             
@@ -1259,14 +1271,23 @@ def hist_page(pdf, data, title, summary_text, unit='e-', precision=1, contours=F
     '''
     Default style of page showing a figure of the image, histograms, and summary text
     '''
-    dmin, dmax = min(data.flatten()), max(data.flatten())
-    data_range = int( (dmax - dmin) / precision ) + 1
+    dmin, dmax = np.min(data), np.max(data)
+    dmedian, dstd = np.median(data), np.std(data)
+    extremes = np.percentile(data, [0.0000573,99.9999427], method='averaged_inverted_cdf')
+    
+    data_range = int( (extremes[1] - extremes[0]) / precision ) + 1
+    data_range2 = int( (dmax - dmin) / precision ) + 1
+    
+    data_hist, bin_edges = np.histogram(data[(data >= extremes[0]) & (data <= extremes[1])],bins=data_range)
+    data_hist2, bin_edges2 = np.histogram(data,bins=data_range2) # i.e. binsize=precision
+    
+    # Define axis limits
+    xlim10sigma = [np.maximum(dmedian-10*dstd, extremes[0]), np.minimum(dmedian+10*dstd, extremes[1])]
+    xlim5sigma = [np.maximum(dmedian-5*dstd, dmin), np.minimum(dmedian+5*dstd, dmax)]
+    xlim2sigma = [np.maximum(dmedian-2*dstd, dmin), np.minimum(dmedian+2*dstd, dmax)]
 
     fig = plt.figure(figsize=[8.5,11],dpi=250)
     plt.suptitle(title)
-    
-    data_hist, bin_edges = np.histogram(data,bins=min([100,data_range]))
-    data_hist2, bin_edges2 = np.histogram(data,bins=data_range) # i.e. binsize=precision
 
     # Output a frame image and histograms
     ax1 = plt.subplot2grid((5,2), (0,0), rowspan=2, colspan=2)
@@ -1283,15 +1304,22 @@ def hist_page(pdf, data, title, summary_text, unit='e-', precision=1, contours=F
     plt.sca(ax2)
     plt.stairs(data_hist,edges=bin_edges)
     plt.xlabel(unit)
+    plt.xlim(xlim10sigma)
+    plt.ylim(0.7,3*max(data_hist))
     plt.ylabel('Pixel Count')
-    plt.text(0.55,0.95,'Whole range',transform=ax2.transAxes)
+    plt.text(0.35,0.95,'±10-sigma from median',transform=ax2.transAxes,fontsize=10)
     plt.semilogy()
     
     plt.sca(ax3)
     plt.stairs(data_hist2,edges=bin_edges2)
     plt.xlabel(unit)
-    plt.xlim(np.percentile(data,[1.e-2,100-1.e-2]))
-    plt.text(0.35,0.95,'0.01 - 99.99 percentile',transform=ax3.transAxes)
+    plt.xlim(xlim5sigma)
+    # Fill the 2-sigma limits
+    plt.fill_between([dmin,xlim2sigma[0]],0.7,4*max(data_hist2),color='k',alpha=0.1)
+    plt.fill_between([xlim2sigma[1],dmax],0.7,4*max(data_hist2),color='k',alpha=0.1)
+    plt.ylim(0.7,4*max(data_hist2))
+    plt.text(0.15,0.96,'±5-sigma from median (shaded)',transform=ax3.transAxes,fontsize=10)
+    plt.text(0.15,0.92,'±2-sigma from median (unshaded)',transform=ax3.transAxes,fontsize=10)
     if vlines:
         for vl in vlines:
             plt.axvline(vl,ls='--',color='grey')
