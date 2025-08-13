@@ -894,6 +894,7 @@ def standard_analysis_products(dirname, **kwargs):
     gain_color = {'high (dual-gain)': 'tab:blue', 'low (dual-gain)': 'tab:orange', 'high': 'tab:green', 'low': 'tab:red'}
     gain_line_color = {'high (dual-gain)': 'darkblue', 'low (dual-gain)': 'brown', 'high': 'darkgreen', 'low': 'darkred'}
     bad_pixel_colors = ['white', 'red', 'blue', 'limegreen','yellow']
+    bad_pixel_labels = ['Good', 'High Noise', 'High Dark', 'Bad Linearity', 'Bad Q.E.']
     
     # Initialize report document
     #doc_name = f'analysis_report_test.pdf'
@@ -958,8 +959,8 @@ def standard_analysis_products(dirname, **kwargs):
             for i in range(len(nw_types)):
                 plot_pixel_map[nw_pixel_map[i] > 0] = i+1.5
             plt.imshow(plot_pixel_map, cmap=bad_color_map, vmin=0, vmax=len(nw_types)+1, interpolation='none')
-            plt.colorbar(orientation='horizontal', label='Bad pixel type', ticks=[0.5,1.5,2.5,3.5,4.5],
-                         format=mticker.FixedFormatter(['Good', 'High Noise', 'High Dark', 'Bad Linearity', 'Bad Q.E.']))
+            plt.colorbar(orientation='horizontal', label='Bad pixel type', ticks=np.arange(nw_types+1)+0.5,
+                         format=mticker.FixedFormatter(bad_pixel_labels[:len(nw_types)+1]))
             
             # Get combined numbers and percentages of bad pixels
             summary_text = ''
@@ -997,8 +998,8 @@ def standard_analysis_products(dirname, **kwargs):
             for i in range(len(nr_types)):
                 plot_pixel_map[nr_pixel_map[i] > 0] = i+1.5
             plt.imshow(plot_pixel_map, cmap=bad_color_map, vmin=0, vmax=len(nr_types)+1, interpolation='none')
-            plt.colorbar(orientation='horizontal', label='Bad pixel type', ticks=[0.5,1.5,2.5],
-                         format=mticker.FixedFormatter(['Good', 'High Noise', 'High Dark']))
+            plt.colorbar(orientation='horizontal', label='Bad pixel type', ticks=np.arange(nr_types+1)+0.5,
+                         format=mticker.FixedFormatter(bad_pixel_labels[:len(nr_types)+1]))
             
             # Get combined numbers and percentages of bad pixels
             summary_text = ''
