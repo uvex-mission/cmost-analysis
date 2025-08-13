@@ -110,10 +110,8 @@ def standard_analysis_products(dirname, **kwargs):
     # Final summary numbers to generate
     read_noise, det_gain, use_gain, dark_current, well_depth, read_time = {}, {}, {}, {}, {}, {}
     read_noise_e, dark_current_e, well_depth_e = {}, {}, {}
-    noise_bad, dark_bad, flat_bad = {}, {}, {}
-    noise_percent_bad, dark_percent_bad, flat_percent_bad = {}, {}, {}
     gain_modes = ['low', 'low (dual-gain)','high','high (dual-gain)']
-    # A nominal gain value for converting ADU to electrons in case PTC gives bad values
+    # A nominal gain value for converting ADU to electrons before gain is actually calculated
     nom_gain = {'high (dual-gain)': 1.2, 'low (dual-gain)': 8.5, 'high': 1.2, 'low': 8.5}
     nom_read_noise = {'high (dual-gain)': 1.75, 'low (dual-gain)': 1.18, 'high': 1.75, 'low': 1.18}
     
@@ -123,23 +121,44 @@ def standard_analysis_products(dirname, **kwargs):
     os.mkdir(output_dirname)
     output_prefix = f'{filedatestring}_{camera}_{detid}'
     
+    # There are two types of 'bad' pixel:
+    # nw - those we do not want to use in calculations due to working anomalously poorly
+    # nr - those that do not meet detector requirements as written
+    # We will store these maps by gain mode as well as in an overall map
+    noise_nw, dark_nw, lin_nw, qe_nw = {}, {}, {}, {}
+    noise_nr, dark_nr = {}, {}
+    nw_types = ['read noise','dark current','linearity','quantum efficiency']
+    nr_types = ['read noise','dark current']
+    
+    # Set the definitions of non-working pixels
+    # Define pixels having noise above 30e- threshold in high gain as nw
+    noise_nw_thresh = 30
+    # Define pixels having dark current exceeding 1 e/s in any gain as nw
+    dark_nw_thresh = 1
+    # Define pixels being 4-sigma above or below expected 2:1 ratio in any gain as nw
+    lin_nw_thresh = 4
+    # Define pixels being <50% of median value in a mid-range flat in any gain as nw
+    qe_nw_thresh = 0.5
+    
+    # Set the definitions of pixels not meeting requirements
+    # Define pixels having noise above 3e- threshold in high gain as bad
+    noise_nr_thresh = 3
+    # Define pixels having dark current exceeding 3e-3 e/s in high gain as bad
+    dark_nr_thresh = 0.003
+    # Not currently any specific requirements on linearity and QE
+    
     # Initialize bad pixel map and create summary filename based on whether or not we're using a subframe
+    # Bad pixel map has an image frame for each type of bad pixel
     if 'subframe' in kwargs:
         subframe = kwargs['subframe']
         x, y = subframe[1]-subframe[0]+1, subframe[3]-subframe[2]+1
-        bad_pixel_map = np.zeros([x,y])
+        nw_pixel_map = np.zeros([len(nw_types),x,y])
+        nr_pixel_map = np.zeros([len(nr_types),x,y])
         doc_name = f'{output_prefix}{subframe}_analysis_report_{nowstring}.pdf'
     else:
-        bad_pixel_map = np.zeros([exp.dev_size[1],exp.dev_size[0]])
+        nw_pixel_map = np.zeros([len(nw_types),exp.dev_size[1],exp.dev_size[0]])
+        nr_pixel_map = np.zeros([len(nr_types),exp.dev_size[1],exp.dev_size[0]])
         doc_name = f'{output_prefix}_analysis_report_{nowstring}.pdf'
-        
-    # Set the definitions of bad pixels
-    # Define bad pixels as having noise above 3e- threshold in high gain
-    noise_bad_thresh = 3
-    # Define bad pixels as having dark current exceeding 3e-3 e/s
-    dark_bad_thresh = 0.003
-    # Define bad pixels as being 5-sigma below flat mean (set later)
-    flat_bad_thresh = {}
     
     ###################################################
     # Data analysis section
@@ -242,21 +261,26 @@ def standard_analysis_products(dirname, **kwargs):
                     bias_comment[gain] = f'Median of {n_frames} minimum-length {gain} gain exposures'
                     noise_comment[gain] = f'Noise map over {n_frames} minimum-length {gain} gain exposures'
         
-        # Calculate the read noise
-        for g in noise_map:
-            # Calculate RMS read noise after filtering out catastrophically bad pixels
-            read_noise[g] = np.sqrt(np.nanmean(noise_map[g][(noise_map[g] * nom_gain[g]) < 100]**2))
-            
+            # Define anomalously bad pixels we want to exclude from later calculations
+            if gain == 'hdr':
+                nom_noise_map_e = noise_map['high (dual-gain)'] * nom_gain['high (dual-gain)']
+                noise_nw['high (dual-gain)'] = nom_noise_map_e >= noise_nw_thresh
+                nw_pixel_map[0][noise_nw['high (dual-gain)']] = 1
+            elif gain == 'high':
+                nom_noise_map_e = noise_map['high'] * nom_gain['high']
+                noise_nw['high'] = nom_noise_map_e >= noise_nw_thresh
+                nw_pixel_map[0][noise_nw['high']] = 1
+                
         # Write the median bias frames to file
-        bias_outpath = write_fits_image(med_bias_frames, 'bias frame', bias_comment,
-                                        os.path.join(output_dirname,f'{output_prefix}_bias_frames.fits'))
+        bias_outpath = write_fits_image(med_bias_frames, 'pixel offset frame', bias_comment,
+                                        os.path.join(output_dirname,f'{output_prefix}_pixeloffset_frames.fits'))
         noise_outpath = write_fits_image(noise_map, 'noise map', noise_comment,
                                          os.path.join(output_dirname,f'{output_prefix}_noise_maps.fits'))
         
-        # If bias is present, bias frame will be subtracted from flats
-        bias_note = ', bias frame subtracted'
+        # If bias is present, pixel offset (bias) frame will be subtracted from flats
+        bias_note = ', pixel offset frame subtracted'
     else:
-        bias_note = ', no bias frame subtracted'
+        bias_note = ', no pixel offset frame subtracted'
         
         
     if longdark_present:
@@ -305,11 +329,11 @@ def standard_analysis_products(dirname, **kwargs):
             long_med = np.median(np.array(longdark[g]),axis=0)
             
             # Subtract either a) a shorter dark frame or b) the bias frame or c) nothing (non-ideal scenario)
-            longdark_comment[g] = f'Median of {len(longdark[g])} x {long_exp_time}s dark frames'
+            longdark_comment[g] = f'Median of {len(longdark[g])} x {long_exp_time:n}s dark frames'
             if len(shortdark[g]) > 0:
                 longdark_exp_time = long_exp_time - short_exp_time
                 longdark_frames[g] = long_med - np.median(np.array(shortdark[g]),axis=0)
-                longdark_comment[g] += f', {short_exp_time}s dark frame subtracted'
+                longdark_comment[g] += f', {short_exp_time:n}s dark frame subtracted'
             elif bias_present:
                 longdark_exp_time = long_exp_time
                 longdark_frames[g] = long_med - med_bias_frames[g]
@@ -319,8 +343,11 @@ def standard_analysis_products(dirname, **kwargs):
                 longdark_frames[g] = long_med
                 longdark_comment[g] += bias_note
                 
-            # Dark current 'measurement' is the 99% percentile
-            dark_current[g] = np.percentile(longdark_frames[g],99)
+            # Define anomalously bad pixels we want to exclude from later calculations
+            # as having dark current exceeding given threshold in any gain mode
+            nom_longdark_e = longdark_frames[g] * nom_gain[g] / longdark_exp_time
+            dark_nw[g] = nom_longdark_e >= dark_nw_thresh
+            nw_pixel_map[1][dark_nw[g]] = 1
         
         # Write the long dark frames to file
         longdark_outpath = write_fits_image(longdark_frames, 'long dark frame', longdark_comment,
@@ -411,15 +438,30 @@ def standard_analysis_products(dirname, **kwargs):
 
     if flat_present:
         # Initialize dictionaries and identify the list of flat frame files
+        flat_frames = {}
         mid_flats, mid_flats_e, mid_flat_times, mid_flat_voltages, mid_flat_comment = {}, {}, {}, {}, {}
+        mid_flat_ratio_im, mid_flat_ratio, mid_flat_ratio_comment = {}, {}, {}
         flat_darks, flat_dark_times = {}, {}
         exp_times, med_sig, var, voltage = {}, {}, {}, {}
         allflats = []
         for f in file_table['FILEPATH']:
             if 'flat_' in f: allflats.append(True)
             else: allflats.append(False)
+            
+        # Define how to split up the detector area into multiple chunks to get subframes for PTC/linearity measurements
+        if 'subframe' in kwargs:
+            # If subframe defined, loop through ~roughly 256x256 chunks of the subframe
+            x_parts = int(np.maximum(1, np.round((subframe[1]-subframe[0]+1) / cw)))
+            y_parts = int(np.maximum(1, np.round((subframe[3]-subframe[2]+1) / cw)))
+            x_size, y_size = (subframe[1]-subframe[0]+1) // x_parts, (subframe[3]-subframe[2]+1) // y_parts
+        else:
+            # If no subframe defined, loop through 256x256 chunks of the detector
+            x_parts, y_parts = int(exp.dev_size[0] // cw), int(exp.dev_size[1] // cw)
+            x_size, y_size = cw, cw
+        n_subframes = x_parts * y_parts
         
-        # Load up example flat frames and get the means/variances for PTC/linearity plots etc.
+        # Load up example flat frames, define bad pixels, and calculate median/variance for PTC
+        exptime_g, led_g = {}, {}
         for gain in ['hdr','high','low']:
             # If flat darks are present, load these up
             if flatdark_present:
@@ -451,125 +493,220 @@ def standard_analysis_products(dirname, **kwargs):
                 if file_table['NUM_EXP'][gain_flats][0] == 3:
                     # We took 3 data frames because we don't trust the first
                     # So ignore 1 initial frame
-                    flat_frames = load_by_filepath(file_table['FILEPATH'][gain_flats], ignore_frame=1, **kwargs)
+                    flat_frames[gain] = load_by_filepath(file_table['FILEPATH'][gain_flats], ignore_frame=1, **kwargs)
                 else:
-                    flat_frames = load_by_filepath(file_table['FILEPATH'][gain_flats], **kwargs)
+                    flat_frames[gain] = load_by_filepath(file_table['FILEPATH'][gain_flats], **kwargs)
                 exptime = file_table['EXPTIME'][gain_flats]
                 if max(file_table['FRAMTIME'][gain_flats] > 0): exptime = exptime + file_table['FRAMTIME'][gain_flats]/1000.
                 elif gain in read_time: exptime = exptime + read_time[gain]
                 if (file_table['LED'][gain_flats] > -1).any():
                     led = file_table['LED'][gain_flats] # get LED voltage from FITS header
                 else:
-                    led = [f.split('/')[-1].split('_')[4] for f in flat_files] # get LED voltage from filename
+                    led = np.array([float(f.split('/')[-1].split('_')[4]) for f in flat_files]) # get LED voltage from filename
                 
                 led_vals = np.unique(led)
                 max_exp, max_i = max(exptime), np.argmax(exptime)
-                
-                # Check whether we want to do masking of existing bad pixels
-                # If >50% of pixels are bad, there's probably a deeper issue, so turn bad pixel masking off
-                bad_frac = np.sum((bad_pixel_map > 0)) / bad_pixel_map.size
-                if bad_frac < 0.5:
-                    domask = True
-                    mask_str = 'masked'
-                else:
-                    domask = False
-                    mask_str = 'not masked'
-                
-                # Define how to split up the detector area into multiple chunks to get a number of medians
-                if 'subframe' in kwargs:
-                    # If subframe defined, loop through ~roughly 256x256 chunks of the subframe
-                    x_parts = int(np.maximum(1, np.round((subframe[1]-subframe[0]+1) / cw)))
-                    y_parts = int(np.maximum(1, np.round((subframe[3]-subframe[2]+1) / cw)))
-                    x_size, y_size = (subframe[1]-subframe[0]+1) // x_parts, (subframe[3]-subframe[2]+1) // y_parts
-                else:
-                    # If no subframe defined, loop through 256x256 chunks of the detector
-                    x_parts, y_parts = int(exp.dev_size[0] // cw), int(exp.dev_size[1] // cw)
-                    x_size, y_size = cw, cw
-                n_subframes = x_parts * y_parts
+                exptime_g[gain], led_g[gain] = exptime, led
 
-                # Loop through frame pairs getting stats and mid-range frames
+                # Get mid-range frames, identify bad pixels
                 if gain == 'hdr':
-                    medians, variance = np.zeros((1,2)), np.zeros((1,2))
-                    all_exp_times, all_voltage = np.zeros(1), np.zeros(1)
-                    
-                    for i in range(x_parts):
-                        for j in range(y_parts):
-                            x1, x2, y1, y2 = x_size*i, x_size*(i+1), y_size*j, y_size*(j+1)
-                            if domask: mask = bad_pixel_map[y1:y2,x1:x2]
-                            else: mask = None
-                            medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
-                            variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
-                            all_exp_times = np.append(all_exp_times, exptime)
-                            all_voltage = np.append(all_voltage, led)
-                    medians, variance, all_exp_times, all_voltage = medians[1:], variance[1:], all_exp_times[1:], all_voltage[1:]
-                    exp_times['high (dual-gain)'], exp_times['low (dual-gain)'] = all_exp_times, all_exp_times
-                    voltage['high (dual-gain)'], voltage['low (dual-gain)'] = all_voltage, all_voltage
-                    med_sig['high (dual-gain)'], med_sig['low (dual-gain)'] = medians[:,0], medians[:,1]
-                    var['high (dual-gain)'], var['low (dual-gain)'] = variance[:,0], variance[:,1]
-                    
                     # Find the mid-range exposures - something close to 10000 ADU
-                    whole_frame_means = np.array([ff.get_median((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames])
+                    whole_frame_means = np.array([ff.get_median((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames[gain]])
                     hmid_exp_i = np.argmin(np.abs(whole_frame_means[:,0] - 10000))
                     lmid_exp_i = np.argmin(np.abs(whole_frame_means[:,1] - 10000))
 
                     mid_flat_times['high (dual-gain)'], mid_flat_times['low (dual-gain)'] = exptime[hmid_exp_i], exptime[lmid_exp_i]
                     mid_flat_voltages['high (dual-gain)'], mid_flat_voltages['low (dual-gain)'] = led[hmid_exp_i], led[lmid_exp_i]
                     
+                    # Subtract flat darks or else bias from mid-range flats
                     if flatdark_present and (len(flat_dark_times['high (dual-gain)']) > 0):
                         this_flat_darkh = flat_dark_times['high (dual-gain)'] == file_table['EXPTIME'][gain_flats][hmid_exp_i]
                         this_flat_darkl = flat_dark_times['low (dual-gain)'] == file_table['EXPTIME'][gain_flats][lmid_exp_i]
                     else:
                         this_flat_darkh, this_flat_darkl = 0, 0
-                    
                     if (np.sum(this_flat_darkh) > 0) and (np.sum(this_flat_darkl) > 0):
                         this_flat_darkh = flat_dark_times['high (dual-gain)'] == file_table['EXPTIME'][gain_flats][hmid_exp_i]
-                        mid_flats['high (dual-gain)'] = flat_frames[hmid_exp_i].cds_frames[0,0] - flat_darks['high (dual-gain)'][this_flat_darkh]
+                        mid_flats['high (dual-gain)'] = flat_frames[gain][hmid_exp_i].cds_frames[0,0] - flat_darks['high (dual-gain)'][this_flat_darkh]
                         this_flat_darkl = flat_dark_times['low (dual-gain)'] == file_table['EXPTIME'][gain_flats][lmid_exp_i]
-                        mid_flats['low (dual-gain)'] = flat_frames[lmid_exp_i].cds_frames[0,1] - flat_darks['low (dual-gain)'][this_flat_darkl]
+                        mid_flats['low (dual-gain)'] = flat_frames[gain][lmid_exp_i].cds_frames[0,1] - flat_darks['low (dual-gain)'][this_flat_darkl]
                     elif bias_present:
-                        mid_flats['high (dual-gain)'] = flat_frames[hmid_exp_i].cds_frames[0,0] - med_bias_frames['high (dual-gain)']
-                        mid_flats['low (dual-gain)'] = flat_frames[lmid_exp_i].cds_frames[0,1] - med_bias_frames['low (dual-gain)']
+                        mid_flats['high (dual-gain)'] = flat_frames[gain][hmid_exp_i].cds_frames[0,0] - med_bias_frames['high (dual-gain)']
+                        mid_flats['low (dual-gain)'] = flat_frames[gain][lmid_exp_i].cds_frames[0,1] - med_bias_frames['low (dual-gain)']
                     else:
-                        mid_flats['high (dual-gain)'] = flat_frames[hmid_exp_i].cds_frames[0,0]
-                        mid_flats['low (dual-gain)'] = flat_frames[lmid_exp_i].cds_frames[0,1]
+                        mid_flats['high (dual-gain)'] = flat_frames[gain][hmid_exp_i].cds_frames[0,0]
+                        mid_flats['low (dual-gain)'] = flat_frames[gain][lmid_exp_i].cds_frames[0,1]
                     mid_flat_comment['high (dual-gain)'] = f'Illuminated {exptime[hmid_exp_i]:.1f}s exposure in high (dual-gain) gain; LED at {led[hmid_exp_i]} V{bias_note}'
                     mid_flat_comment['low (dual-gain)'] = f'Illuminated {exptime[lmid_exp_i]:.1f}s exposure in low (dual-gain) gain; LED at {led[lmid_exp_i]} V{bias_note}'
-
+                    
+                    # Find the exposure with an exposure time ratio closest to 2 (or 1/2 if this is the shortest exposure time)
+                    # and create mid-flat ratio images
+                    # For high-gain...
+                    if exptime[hmid_exp_i] > min(exptime):
+                        ratio_exptime = exptime[np.argmin(np.abs(exptime[hmid_exp_i] / exptime - 2))]
+                        hratio_index = np.nonzero((exptime == ratio_exptime) & (led == led[hmid_exp_i]))[0][0]
+                        mid_flat_ratio['high (dual-gain)'] = exptime[hmid_exp_i] / exptime[hratio_index]
+                        
+                        ratio_flat1 = mid_flats['high (dual-gain)']
+                        ratio_flat2 = flat_frames[gain][hratio_index].cds_frames[0,0]
+                        # Subtract the equal-length dark or bias frame from the ratio flat
+                        if (np.sum(this_flat_darkh) > 0):
+                            this_flat_darkh2 = flat_dark_times['high (dual-gain)'] == file_table['EXPTIME'][gain_flats][hratio_index]
+                            ratio_flat2 = ratio_flat2 - flat_darks['high (dual-gain)'][this_flat_darkh2]
+                        elif bias_present:
+                            ratio_flat2 = ratio_flat2 - med_bias_frames['high (dual-gain)']
+                        mid_flat_ratio_comment['high (dual-gain)'] = f'Ratio of {exptime[hmid_exp_i]} s and {exptime[hratio_index]} s exposures at {led[hmid_exp_i]} V'
+                    else:
+                        ratio_exptime = exptime[np.argmin(np.abs(exptime[hmid_exp_i] / exptime - 0.5))]
+                        hratio_index = np.nonzero((exptime == ratio_exptime) & (led == led[hmid_exp_i]))[0][0]
+                        mid_flat_ratio['high (dual-gain)'] = exptime[hratio_index] / exptime[hmid_exp_i]
+                        
+                        ratio_flat1 = flat_frames[gain][hratio_index].cds_frames[0,0]
+                        ratio_flat2 = mid_flats['high (dual-gain)']
+                        # Subtract the equal-length dark or bias frame from the ratio flat
+                        if (np.sum(this_flat_darkh) > 0):
+                            this_flat_darkh1 = flat_dark_times['high (dual-gain)'] == file_table['EXPTIME'][gain_flats][hratio_index]
+                            ratio_flat1 = ratio_flat1 - flat_darks['high (dual-gain)'][this_flat_darkh1]
+                        elif bias_present:
+                            ratio_flat1 = ratio_flat1 - med_bias_frames['high (dual-gain)']
+                        mid_flat_ratio_comment['high (dual-gain)'] = f'Ratio of {exptime[hratio_index]} s and {exptime[hmid_exp_i]} s exposures at {led[hmid_exp_i]} V'
+                    mid_flat_ratio_im['high (dual-gain)'] = ratio_flat1 / ratio_flat2
+                    
+                    # ...and low-gain
+                    if exptime[lmid_exp_i] > min(exptime):
+                        ratio_exptime = exptime[np.argmin(np.abs(exptime[lmid_exp_i] / exptime - 2))]
+                        lratio_index = np.nonzero((exptime == ratio_exptime) & (led == led[lmid_exp_i]))[0][0]
+                        mid_flat_ratio['low (dual-gain)'] = exptime[lmid_exp_i] / exptime[lratio_index]
+                        
+                        ratio_flat1 = mid_flats['low (dual-gain)']
+                        ratio_flat2 = flat_frames[gain][lratio_index].cds_frames[0,1]
+                        # Subtract the equal-length dark or bias frame from the ratio flat
+                        if (np.sum(this_flat_darkl) > 0):
+                            this_flat_darkl2 = flat_dark_times['low (dual-gain)'] == file_table['EXPTIME'][gain_flats][lratio_index]
+                            ratio_flat2 = ratio_flat2 - flat_darks['low (dual-gain)'][this_flat_darkl2]
+                        elif bias_present:
+                            ratio_flat2 = ratio_flat2 - med_bias_frames['low (dual-gain)']
+                        mid_flat_ratio_comment['low (dual-gain)'] = f'Ratio of {exptime[lmid_exp_i]} s and {exptime[lratio_index]} s exposures at {led[lmid_exp_i]} V'
+                    else:
+                        ratio_exptime = exptime[np.argmin(np.abs(exptime[lmid_exp_i] / exptime - 0.5))]
+                        lratio_index = np.nonzero((exptime == ratio_exptime) & (led == led[lmid_exp_i]))[0][0]
+                        mid_flat_ratio['low (dual-gain)'] = exptime[lratio_index] / exptime[lmid_exp_i]
+                        
+                        ratio_flat1 = flat_frames[gain][lratio_index].cds_frames[0,1]
+                        ratio_flat2 = mid_flats['low (dual-gain)']
+                        # Subtract the equal-length dark or bias frame from the ratio flat
+                        if (np.sum(this_flat_darkl) > 0):
+                            this_flat_darkl1 = flat_dark_times['low (dual-gain)'] == file_table['EXPTIME'][gain_flats][lratio_index]
+                            ratio_flat1 = ratio_flat1 - flat_darks['low (dual-gain)'][this_flat_darkl1]
+                        elif bias_present:
+                            ratio_flat1 = ratio_flat1 - med_bias_frames['low (dual-gain)']
+                        mid_flat_ratio_comment['low (dual-gain)'] = f'Ratio of {exptime[lratio_index]} s and {exptime[lmid_exp_i]} s exposures at {led[lmid_exp_i]} V'
+                    mid_flat_ratio_im['low (dual-gain)'] = ratio_flat1 / ratio_flat2
+                    
+                    # Define anomalously bad pixels we want to exclude from later calculations
+                    # Flag pixels that are >lin_nw_thresh-sigma higher or lower than the median
+                    lin_nw['high (dual-gain)'] = np.abs(mid_flat_ratio_im['high (dual-gain)'] - np.median(mid_flat_ratio_im['high (dual-gain)'])) > (lin_nw_thresh * np.std(mid_flat_ratio_im['high (dual-gain)']))
+                    lin_nw['low (dual-gain)'] = np.abs(mid_flat_ratio_im['low (dual-gain)'] - np.median(mid_flat_ratio_im['low (dual-gain)'])) > (lin_nw_thresh * np.std(mid_flat_ratio_im['low (dual-gain)']))
+                    nw_pixel_map[2][lin_nw['high (dual-gain)'] | lin_nw['low (dual-gain)']] = 1
+                    
+                    # Flag pixels being <qe_nw_thresh of median value in a mid-range flat
+                    qe_nw['high (dual-gain)'] = mid_flats['high (dual-gain)'] < (qe_nw_thresh * np.median(mid_flats['high (dual-gain)']))
+                    qe_nw['low (dual-gain)'] = mid_flats['low (dual-gain)'] < (qe_nw_thresh * np.median(mid_flats['low (dual-gain)']))
+                    nw_pixel_map[3][qe_nw['high (dual-gain)'] | qe_nw['low (dual-gain)']] = 1
                 else:
-                    medians, variance = np.zeros(1), np.zeros(1)
-                    all_exp_times, all_voltage = np.zeros(1), np.zeros(1)
-                    
-                    for i in range(x_parts):
-                        for j in range(y_parts):
-                            x1, x2, y1, y2 = x_size*i, x_size*(i+1), y_size*j, y_size*(j+1)
-                            if domask: mask = bad_pixel_map[y1:y2,x1:x2]
-                            else: mask = None
-                            medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
-                            variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2), mask=mask) for ff in flat_frames], axis=0)
-                            all_exp_times = np.append(all_exp_times, exptime)
-                            all_voltage = np.append(all_voltage, led)
-                    medians, variance, all_exp_times, all_voltage = medians[1:], variance[1:], all_exp_times[1:], all_voltage[1:]
-                    exp_times[gain] = all_exp_times
-                    voltage[gain] = all_voltage
-                    med_sig[gain] = medians
-                    var[gain] = variance
-                    
-                    # Find the mid-range exposures
-                    whole_frame_means = np.array([ff.get_mean((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames])
+                    # All as in HDR section but for single gain
+                    whole_frame_means = np.array([ff.get_mean((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames[gain]])
                     mid_exp_i = np.argmin(np.abs(whole_frame_means - 10000))
                     mid_flat_times[gain] = exptime[mid_exp_i]
                     mid_flat_voltages[gain] = led[mid_exp_i]
+                    
                     if flatdark_present and (len(flat_dark_times[gain]) > 0):
                         this_flat_dark = flat_dark_times[gain] == file_table['EXPTIME'][gain_flats][mid_exp_i]
                     else:
                         this_flat_dark = 0
-                    if np.sum(this_flat_dark) > 1:
-                        mid_flats[gain] = flat_frames[mid_exp_i].cds_frames[0] - flat_darks[gain][this_flat_dark]
+                    if np.sum(this_flat_dark) > 0:
+                        mid_flats[gain] = flat_frames[gain][mid_exp_i].cds_frames[0] - flat_darks[gain][this_flat_dark]
                     elif bias_present:
-                        mid_flats[gain] = flat_frames[mid_exp_i].cds_frames[0] - med_bias_frames[gain]
+                        mid_flats[gain] = flat_frames[gain][mid_exp_i].cds_frames[0] - med_bias_frames[gain]
                     else:
-                        mid_flats[gain] = flat_frames[mid_exp_i].cds_frames[0]
+                        mid_flats[gain] = flat_frames[gain][mid_exp_i].cds_frames[0]
                     mid_flat_comment[gain] = f'Illuminated {exptime[mid_exp_i]:.1f}s exposure in {gain} gain mode; LED at {led[mid_exp_i]} V{bias_note}'
+                    
+                    if exptime[mid_exp_i] > min(exptime):
+                        ratio_exptime = exptime[np.argmin(np.abs(exptime[mid_exp_i] / exptime - 2))]
+                        ratio_index = np.nonzero((exptime == ratio_exptime) & (led == led[mid_exp_i]))[0][0]
+                        mid_flat_ratio[gain] = exptime[mid_exp_i] / exptime[ratio_index]
+                        
+                        ratio_flat1 = mid_flats[gain]
+                        ratio_flat2 = flat_frames[gain][ratio_index].cds_frames[0]
+                        # Subtract the equal-length dark or bias frame from the ratio flat
+                        if (np.sum(this_flat_dark) > 0):
+                            this_flat_dark2 = flat_dark_times[gain] == file_table['EXPTIME'][gain_flats][ratio_index]
+                            ratio_flat2 = ratio_flat2 - flat_darks[gain][this_flat_dark2]
+                        elif bias_present:
+                            ratio_flat2 = ratio_flat2 - med_bias_frames[gain]
+                        mid_flat_ratio_comment[gain] = f'Ratio of {exptime[mid_exp_i]} s and {exptime[ratio_index]} s exposures at {led[mid_exp_i]} V'
+                    else:
+                        ratio_exptime = exptime[np.argmin(np.abs(exptime[mid_exp_i] / exptime - 0.5))]
+                        ratio_index = np.nonzero((exptime == ratio_exptime) & (led == led[mid_exp_i]))[0][0]
+                        mid_flat_ratio[gain] = exptime[ratio_index] / exptime[mid_exp_i]
+                        
+                        ratio_flat1 = flat_frames[gain][ratio_index].cds_frames[0]
+                        ratio_flat2 = mid_flats[gain]
+                        # Subtract the equal-length dark or bias frame from the ratio flat
+                        if (np.sum(this_flat_dark) > 0):
+                            this_flat_dark1 = flat_dark_times[gain] == file_table['EXPTIME'][gain_flats][ratio_index]
+                            ratio_flat1 = ratio_flat1 - flat_darks[gain][this_flat_dark1]
+                        elif bias_present:
+                            ratio_flat1 = ratio_flat1 - med_bias_frames[gain]
+                        mid_flat_ratio_comment[gain] = f'Ratio of {exptime[ratio_index]} s and {exptime[mid_exp_i]} s exposures at {led[mid_exp_i]} V'
+                    mid_flat_ratio_im[gain] = ratio_flat1 / ratio_flat2
+                    
+                    lin_nw[gain] = np.abs(mid_flat_ratio_im[gain] - np.median(mid_flat_ratio_im[gain])) > (lin_nw_thresh * np.std(mid_flat_ratio_im[gain]))
+                    nw_pixel_map[2][lin_nw[gain]] = 1
+                    
+                    qe_nw[gain] = mid_flats[gain] < (qe_nw_thresh * np.median(mid_flats[gain]))
+                    nw_pixel_map[3][qe_nw[gain]] = 1
+
+        # Now calculate the gain
+        # Exclude pixels flagged as nw for any reason
+        bad_pixel_map = np.sum(nw_pixel_map, axis=0)
+                
+        for gain in flat_frames:
+            # Loop through frame pairs getting PTC stats
+            if gain == 'hdr':
+                medians, variance = np.zeros((1,2)), np.zeros((1,2))
+                all_exp_times, all_voltage = np.zeros(1), np.zeros(1)
+                
+                for i in range(x_parts):
+                    for j in range(y_parts):
+                        x1, x2, y1, y2 = x_size*i, x_size*(i+1), y_size*j, y_size*(j+1)
+                        mask = bad_pixel_map[y1:y2,x1:x2]
+                        medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) for ff in flat_frames[gain]], axis=0)
+                        variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2), mask=mask) for ff in flat_frames[gain]], axis=0)
+                        all_exp_times = np.append(all_exp_times, exptime_g[gain])
+                        all_voltage = np.append(all_voltage, led_g[gain])
+                medians, variance, all_exp_times, all_voltage = medians[1:], variance[1:], all_exp_times[1:], all_voltage[1:]
+                exp_times['high (dual-gain)'], exp_times['low (dual-gain)'] = all_exp_times, all_exp_times
+                voltage['high (dual-gain)'], voltage['low (dual-gain)'] = all_voltage, all_voltage
+                med_sig['high (dual-gain)'], med_sig['low (dual-gain)'] = medians[:,0], medians[:,1]
+                var['high (dual-gain)'], var['low (dual-gain)'] = variance[:,0], variance[:,1]
+            else:
+                medians, variance = np.zeros(1), np.zeros(1)
+                all_exp_times, all_voltage = np.zeros(1), np.zeros(1)
+                
+                for i in range(x_parts):
+                    for j in range(y_parts):
+                        x1, x2, y1, y2 = x_size*i, x_size*(i+1), y_size*j, y_size*(j+1)
+                        mask = bad_pixel_map[y1:y2,x1:x2]
+                        medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) for ff in flat_frames[gain]], axis=0)
+                        variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2), mask=mask) for ff in flat_frames[gain]], axis=0)
+                        all_exp_times = np.append(all_exp_times, exptime_g[gain])
+                        all_voltage = np.append(all_voltage, led_g[gain])
+                medians, variance, all_exp_times, all_voltage = medians[1:], variance[1:], all_exp_times[1:], all_voltage[1:]
+                exp_times[gain] = all_exp_times
+                voltage[gain] = all_voltage
+                med_sig[gain] = medians
+                var[gain] = variance
         
         # Write the mid flat frames to file
         flat_outpath = write_fits_image(mid_flats, 'sample flat frame', mid_flat_comment,
@@ -606,7 +743,7 @@ def standard_analysis_products(dirname, **kwargs):
             # Write the median/variance/voltage data to an output table
             flat_table = Table([med_sig[g], var[g], voltage[g], exp_times[g], for_fitting[g]],
                                 names=('Median','Variance','Voltage','Exptime','Valid'),
-                                meta={'comments': f'Median and variance in ADU. Using {x_size}x{y_size} subframes. Bad pixels are {mask_str}.'})
+                                meta={'comments': f'Median and variance in ADU. Using {x_size}x{y_size} subframes. Bad (non-working) pixels are masked.'})
             flat_table.write(os.path.join(output_dirname,f'ptc_data_{g.translate(str.maketrans("", "", " (-)"))}.ecsv'))
             
             try:
@@ -626,21 +763,26 @@ def standard_analysis_products(dirname, **kwargs):
                 print(f'Problem fitting slope for gain mode {g}, skipping and using nominal gain')
     
     # Convert all properties to electron units using either measured gain or nominal gain
+    # Perform overall calculations while excluding anomalously bad pixels
+    all_good_pixels = np.sum(nw_pixel_map, axis=0) == 0
+    
     gain_note = {}
     for g in gain_modes:
-        gs = g.translate(str.maketrans("", "", " (-)")) # Simple gain sting for filenames
-    
+        gs = g.translate(str.maketrans("", "", " (-)")) # Simple gain string for filenames
+        
         if g in det_gain:
             use_gain[g] = det_gain[g][0]
             gain_comment = f'; Converted to electron units using measured gain {det_gain[g][0]:.3f} +/- {det_gain[g][1]:.3f} e-/ADU'
         else:
             use_gain[g] = nom_gain[g]
             gain_comment = f'; Converted to electron units using nominal (NOT measured) gain {nom_gain[g]} e-/ADU'
-        
-        if g in read_noise: read_noise_e[g] = read_noise[g] * use_gain[g]
-        if g in dark_current: dark_current_e[g] = dark_current[g] * use_gain[g] / longdark_exp_time
-        
+
         if bias_present:
+            if g in noise_map:
+                # Calculate RMS read noise using only well-behaved pixels
+                read_noise[g] = np.sqrt(np.nanmean(noise_map[g][all_good_pixels]**2))
+                read_noise_e[g] = read_noise[g] * use_gain[g]
+        
             if g in med_bias_frames:
                 # Create electron-unit frames
                 bias_comment[g] += gain_comment
@@ -649,32 +791,36 @@ def standard_analysis_products(dirname, **kwargs):
                 noise_map_e[g] = noise_map[g] * use_gain[g]
                 
                 # Plot individual bias/noise frames
-                make_plot(med_bias_frames[g], med_bias_frames_e[g], f'Median bias frame - gain: {g}',
-                          os.path.join(output_dirname,f'{output_prefix}_bias_frame_{gs}.png'))
+                make_plot(med_bias_frames[g], med_bias_frames_e[g], f'Median pixel offset frame - gain: {g}',
+                          os.path.join(output_dirname,f'{output_prefix}_pixeloffset_frame_{gs}.png'))
                 make_plot(noise_map[g], noise_map_e[g], f'Noise map - gain: {g}',
                           os.path.join(output_dirname,f'{output_prefix}_noise_map_{gs}.png'))
                 
-                # Define bad pixels as having noise above given threshold in high gain
+                # Define pixels not meeting requirements as having noise above given threshold in high gain
                 if (g == 'high') | (g == 'high (dual-gain)'):
-                    noise_bad[g] = noise_map_e[g] >= noise_bad_thresh
-                    noise_percent_bad[g] = np.sum(noise_bad[g]) / noise_map_e[g].size * 100
-                    bad_pixel_map[noise_map_e[g] >= noise_bad_thresh] = 1
-                    
+                    noise_nr[g] = noise_map_e[g] >= noise_nr_thresh
+                    nr_pixel_map[0][noise_map_e[g] >= noise_nr_thresh] = 1
+        
         if longdark_present:
             if g in longdark_frames:
+                # Dark current 'measurement' is the 99% percentile, using only well-behaved pixels
+                # Since most pixels will have low enough dark current to be dominated by read noise,
+                # median isn't a useful metric here
+                dark_current[g] = np.percentile(longdark_frames[g][all_good_pixels],99)
+                dark_current_e[g] = dark_current[g] * use_gain[g] / longdark_exp_time
+            
                 # Create electron/s unit frames
-                longdark_comment[g] += gain_comment+f'; Converted to rate using exposure time: {longdark_exp_time} s.'
+                longdark_comment[g] += gain_comment+f'; Converted to rate using exposure time: {longdark_exp_time:n} s.'
                 longdark_frames_e[g] = (longdark_frames[g] * use_gain[g]) / longdark_exp_time
                 
                 # Plot individual dark frames
                 make_plot(longdark_frames[g], longdark_frames_e[g], f'Median long dark frame - gain: {g}',
                           os.path.join(output_dirname,f'{output_prefix}_longdark_frame_{gs}.png'), eunit='e-/s')
                 
-                # Define bad pixels as having dark current exceeding given threshold in high gain
+                # Define pixels not meeting requirements as having dark current exceeding given threshold in high gain mode
                 if (g == 'high') | (g == 'high (dual-gain)'):
-                    dark_bad[g] = longdark_frames_e[g] > dark_bad_thresh
-                    dark_percent_bad[g] = np.sum(dark_bad[g]) / longdark_frames_e[g].size * 100
-                    bad_pixel_map[longdark_frames_e[g] > dark_bad_thresh] = 2
+                    dark_nr[g] = longdark_frames_e[g] >= dark_nr_thresh
+                    nr_pixel_map[1][longdark_frames_e[g] >= dark_nr_thresh] = 1
                     
         if flat_present:
             if g in med_sig:
@@ -688,12 +834,7 @@ def standard_analysis_products(dirname, **kwargs):
                 make_plot(mid_flats[g], mid_flats_e[g], f'Sample flat frame - gain: {g}',
                           os.path.join(output_dirname,f'{output_prefix}_flat_frame_{gs}.png'))
                 
-                # Define bad pixels as particularly low-response, having 5-sigma lower signal than mean pixel
-                # TODO: find a better way to define bad pixels in this case?
-                flat_bad_thresh[g] = np.mean(mid_flats_e[g]) - 5*np.std(mid_flats_e[g])
-                flat_bad[g] = mid_flats_e[g] < flat_bad_thresh[g]
-                flat_percent_bad[g] = np.sum(flat_bad[g]) / mid_flats_e[g].size * 100
-                bad_pixel_map[mid_flats_e[g] < flat_bad_thresh[g]] = 3
+                # Define pixels not meeting linearity/QE requirements here (currently none)
                 
     if opdark_present:
         long_high_opdark_e, long_low_opdark_e, short_high_opdark_e, short_low_opdark_e = {}, {}, {}, {}
@@ -710,8 +851,8 @@ def standard_analysis_products(dirname, **kwargs):
 
     # Write all these FITS files again in electron (/s) units
     if bias_present:
-        bias_e_outpath = write_fits_image(med_bias_frames_e, 'bias frame', bias_comment,
-                                          os.path.join(output_dirname,f'{output_prefix}_bias_frames_e.fits'))
+        bias_e_outpath = write_fits_image(med_bias_frames_e, 'pixel offset frame', bias_comment,
+                                          os.path.join(output_dirname,f'{output_prefix}_pixeloffset_frames_e.fits'))
         noise_e_outpath = write_fits_image(noise_map_e, 'noise map', noise_comment,
                                            os.path.join(output_dirname,f'{output_prefix}_noise_maps_e.fits'))
     if longdark_present:
@@ -720,7 +861,27 @@ def standard_analysis_products(dirname, **kwargs):
     if flat_present:
         flat_e_outpath = write_fits_image(mid_flats_e, 'sample flat frame', mid_flat_comment,
                                           os.path.join(output_dirname,f'{output_prefix}_flat_frames_e.fits'))
-    
+
+    # Write bad pixel FITS images
+    # Anomalously bad (non-working) pixels
+    hdus = [fits.PrimaryHDU()]
+    for i in range(len(nw_types)):
+        imhdu = fits.ImageHDU(data=nw_pixel_map[i], name=f'{nw_types[i]}')
+        imhdu.header['TYPE'] = f'{nw_types[i]} bad pixels'
+        imhdu.header['COMMENT'] = f'Anomalously bad pixels excluded from calculations due to {nw_types[i]}'
+        hdus.append(imhdu)
+    hdulist = fits.HDUList(hdus=hdus)
+    hdulist.writeto(os.path.join(output_dirname,f'{output_prefix}_bad_pixels_nw.fits'))
+
+    # Pixels that do not meet requirements
+    hdus = [fits.PrimaryHDU()]
+    for i in range(len(nr_types)):
+        imhdu = fits.ImageHDU(data=nr_pixel_map[i], name=f'{nr_types[i]}')
+        imhdu.header['TYPE'] = f'{nr_types[i]} bad pixels'
+        imhdu.header['COMMENT'] = f'Pixels that do not meet requirements due to {nr_types[i]}'
+        hdus.append(imhdu)
+    hdulist = fits.HDUList(hdus=hdus)
+    hdulist.writeto(os.path.join(output_dirname,f'{output_prefix}_bad_pixels_nr.fits'))
     
     # TODO: Add all the electron unit frame stats to some sort of output table
     
@@ -732,6 +893,7 @@ def standard_analysis_products(dirname, **kwargs):
     # Plot settings
     gain_color = {'high (dual-gain)': 'tab:blue', 'low (dual-gain)': 'tab:orange', 'high': 'tab:green', 'low': 'tab:red'}
     gain_line_color = {'high (dual-gain)': 'darkblue', 'low (dual-gain)': 'brown', 'high': 'darkgreen', 'low': 'darkred'}
+    bad_pixel_colors = ['white', 'red', 'blue', 'limegreen','yellow']
     
     # Initialize report document
     #doc_name = f'analysis_report_test.pdf'
@@ -746,7 +908,7 @@ def standard_analysis_products(dirname, **kwargs):
         
         # Temperature
         if exp.temperature > 0: temp = f'{exp.temperature:2f} K (measured)'
-        else: temp = 'TEMPERATURE DATA MISSING (default is 140K)'
+        else: temp = 'TEMPERATURE DATA MISSING (default 180K as of July 2025)'
         
         # Device and test summary text
         summary_text = f'Cosmetic report for DeviceID: {detid}\n'
@@ -763,7 +925,7 @@ def standard_analysis_products(dirname, **kwargs):
         summary_text += 'Contents:\n'
         if singleframe_present: summary_text += '- Single readout frames\n'
         if noise_present: summary_text += '- Noise spectrum\n'
-        if bias_present: summary_text += '- Bias frames\n'
+        if bias_present: summary_text += '- Pixel offset frames\n'
         if longdark_present: summary_text += '- Long dark frames\n'
         if opdark_present: summary_text += '- Standard operating dark frames\n'
         if persist_present: summary_text += '- Persistence test frames\n'
@@ -785,36 +947,76 @@ def standard_analysis_products(dirname, **kwargs):
         
         # So-what summary pages at the top
         if bias_present or longdark_present or flat_present:
-            # Bad pixel map page
+
+            # Bad (not-working) pixel map page
             fig = plt.figure(figsize=[8.5,11],dpi=250)
-            plt.suptitle('Bad pixel map')
-            ax1 = plt.subplot2grid((2,1), (0,0))
+            plt.suptitle('Bad pixel map (not used in calculations)')
+            ax1 = plt.subplot2grid((3,1), (0,0), rowspan=2)
             plt.sca(ax1)
-            bad_color_map = matplotlib.colors.ListedColormap(['white', 'red', 'blue', 'limegreen'])
-            plt.imshow(bad_pixel_map+0.5, cmap=bad_color_map, vmin=0, vmax=4)
-            plt.colorbar(orientation='horizontal', label='Bad pixel type', ticks=[0.5,1.5,2.5,3.5],
-                         format=mticker.FixedFormatter(['Good', 'High Noise', 'High Dark', 'Low Sensitivity']))
+            bad_color_map = matplotlib.colors.ListedColormap(bad_pixel_colors[:len(nw_types)+1])
+            plot_pixel_map = np.zeros(nw_pixel_map.shape[1:])+0.5
+            for i in range(len(nw_types)):
+                plot_pixel_map[nw_pixel_map[i] > 0] = i+1.5
+            plt.imshow(plot_pixel_map, cmap=bad_color_map, vmin=0, vmax=len(nw_types)+1, interpolation='none')
+            plt.colorbar(orientation='horizontal', label='Bad pixel type', ticks=[0.5,1.5,2.5,3.5,4.5],
+                         format=mticker.FixedFormatter(['Good', 'High Noise', 'High Dark', 'Bad Linearity', 'Bad Q.E.']))
             
             # Get combined numbers and percentages of bad pixels
             summary_text = ''
-            
             if bias_present:
-                total_noise_bad = np.sum(np.any(np.stack(list(noise_bad.values())),axis=0))
-                total_noise_percent_bad = total_noise_bad / bad_pixel_map.size * 100
-                summary_text += f'High noise pixels (>{noise_bad_thresh} e-): {total_noise_bad} ({total_noise_percent_bad:.2f} %)\n'
+                total_noise_nw = np.sum(nw_pixel_map[0])
+                total_noise_percent_nw = total_noise_nw / nw_pixel_map[0].size * 100
+                summary_text += f'Bad noise pixels (>{noise_nw_thresh} e-): {int(total_noise_nw)} ({total_noise_percent_nw:.2f} %)\n'
             if longdark_present:
-                total_dark_bad = np.sum(np.any(np.stack(list(dark_bad.values())),axis=0))
-                total_dark_percent_bad = total_dark_bad / bad_pixel_map.size * 100
-                summary_text += f'High dark current pixels (>{dark_bad_thresh} e-/s): {total_dark_bad} ({total_dark_percent_bad:.2f} %)\n'
+                total_dark_nw = np.sum(nw_pixel_map[1])
+                total_dark_percent_nw = total_dark_nw / nw_pixel_map[1].size * 100
+                summary_text += f'Bad dark current pixels (>{dark_nw_thresh} e-/s): {int(total_dark_nw)} ({total_dark_percent_nw:.2f} %)\n'
             if flat_present:
-                total_flat_bad = np.sum(np.any(np.stack(list(flat_bad.values())),axis=0))
-                total_flat_percent_bad = total_flat_bad / bad_pixel_map.size * 100
-                summary_text += f'Low sensitivity current pixels (<5-sigma below mean): {total_flat_bad} ({total_flat_percent_bad:.2f} %)\n'
-            total_percentage_bad = np.sum((bad_pixel_map > 0)) / bad_pixel_map.size * 100
+                total_lin_nw = np.sum(nw_pixel_map[2])
+                total_lin_percent_nw = total_lin_nw / nw_pixel_map[2].size * 100
+                summary_text += f'Bad linearity pixels (>{lin_nw_thresh}-sigma above/below expected ratio): {int(total_lin_nw)} ({total_lin_percent_nw:.2f} %)\n'
+                total_qe_nw = np.sum(nw_pixel_map[3])
+                total_qe_percent_nw = total_qe_nw / nw_pixel_map[3].size * 100
+                summary_text += f'Bad Q.E. pixels (<{qe_nw_thresh}x median value in mid-range flat): {int(total_qe_nw)} ({total_qe_percent_nw:.2f} %)\n'
+            total_nw_pixels = np.sum(np.sum(nw_pixel_map, axis=0) > 0)
+            total_percentage_nw = total_nw_pixels / nw_pixel_map[0].size * 100
 
-            summary_text += f'Total number of bad pixels: {int(np.sum(bad_pixel_map))} ({total_percentage_bad:.2f} %)'
-            plt.text(-0.5, -1, summary_text, transform=ax1.transAxes, verticalalignment='top')
+            summary_text += f'Total number of bad pixels: {int(total_nw_pixels)} ({total_percentage_nw:.2f} %)'
+            plt.text(-0.35, -0.6, summary_text, transform=ax1.transAxes, verticalalignment='top')
+
+            pdf.savefig()
+            plt.close()
+
+            # Bad (not meeting requirements) pixel map page
+            fig = plt.figure(figsize=[8.5,11],dpi=250)
+            plt.suptitle('Bad pixel map (not meeting requirements)')
+            ax1 = plt.subplot2grid((3,1), (0,0), rowspan=2)
+            plt.sca(ax1)
+            bad_color_map = matplotlib.colors.ListedColormap(bad_pixel_colors[:len(nr_types)+1])
+            plot_pixel_map = np.zeros(nr_pixel_map.shape[1:])+0.5
+            for i in range(len(nr_types)):
+                plot_pixel_map[nr_pixel_map[i] > 0] = i+1.5
+            plt.imshow(plot_pixel_map, cmap=bad_color_map, vmin=0, vmax=len(nr_types)+1, interpolation='none')
+            plt.colorbar(orientation='horizontal', label='Bad pixel type', ticks=[0.5,1.5,2.5],
+                         format=mticker.FixedFormatter(['Good', 'High Noise', 'High Dark']))
             
+            # Get combined numbers and percentages of bad pixels
+            summary_text = ''
+            if bias_present:
+                total_noise_nr = np.sum(nr_pixel_map[0])
+                total_noise_percent_nr = total_noise_nr / nr_pixel_map[0].size * 100
+                summary_text += f'Bad noise pixels (>{noise_nr_thresh} e-): {int(total_noise_nr)} ({total_noise_percent_nr:.2f} %)\n'
+            if longdark_present:
+                total_dark_nr = np.sum(nr_pixel_map[1])
+                total_dark_percent_nr = total_dark_nr / nr_pixel_map[1].size * 100
+                summary_text += f'Bad dark current pixels (>{dark_nr_thresh} e-/s): {int(total_dark_nr)} ({total_dark_percent_nr:.2f} %)\n'
+                
+            total_nr_pixels = np.sum(np.sum(nr_pixel_map, axis=0) > 0)
+            total_percentage_nr = total_nr_pixels / nr_pixel_map[0].size * 100
+
+            summary_text += f'Total number of bad pixels: {int(total_nr_pixels)} ({total_percentage_nr:.2f} %)'
+            plt.text(-0.35, -0.6, summary_text, transform=ax1.transAxes, verticalalignment='top')
+
             pdf.savefig()
             plt.close()
         
@@ -846,9 +1048,13 @@ def standard_analysis_products(dirname, **kwargs):
                 if g in dark_current: plt.text(c4, 8.5-i*0.5, f'{dark_current_e[g]*1000:.2f}', ha='right')
                 if g in well_depth: plt.text(c5, 8.5-i*0.5, f'{int(well_depth_e[g])}', ha='right')
             
+            # Note re: excluding bad pixels
+            fig.text(0.12, 0.5, f'Properties calculated excluding {int(total_nw_pixels)} anomalously bad pixels.')
+            
             fig.text(0.96, 0.02, pdf.get_pagecount()+1)
             pdf.savefig()
             plt.close()
+        
         
         # Bias plots
         if bias_present:
@@ -864,7 +1070,7 @@ def standard_analysis_products(dirname, **kwargs):
                     summary_text += f'Min median pixel value: {mmin:.1f} e-; max median pixel value: {mmax:.1f} e- \n'
                     
                     # Create a standard histogram page and save it to the pdf
-                    hist_page(pdf, med_bias_frames_e[g], f'Bias frames - gain: {g}', summary_text, precision=use_gain[g])
+                    hist_page(pdf, med_bias_frames_e[g], f'Pixel offset frames - gain: {g}', summary_text, precision=use_gain[g])
             
             # Plot noise maps
             for g in gain_modes:
@@ -877,9 +1083,12 @@ def standard_analysis_products(dirname, **kwargs):
                     summary_text += f'Min noise value: {nmin:.1f} e-; max noise value: {nmax:.1f} e- \n'
                     summary_text += f'Read noise (RMS): {read_noise_e[g]:.2f} e-\n'
                     if (g == 'high') | (g == 'high (dual-gain)'):
-                        summary_text += f'Percentage above {noise_bad_thresh} e-: {noise_percent_bad[g]:.2f} %\n'
+                        noise_percent_nw = np.sum(noise_nw[g]) / nw_pixel_map[0].size * 100
+                        summary_text += f'Percentage above {noise_nw_thresh} e-: {noise_percent_nw:.2f} %\n'
+                        noise_percent_nr = np.sum(noise_nr[g]) / nr_pixel_map[0].size * 100
+                        summary_text += f'Percentage above {noise_nr_thresh} e-: {noise_percent_nr:.2f} %\n'
                         hist_page(pdf, noise_map_e[g], f'Noise map - gain: {g}', summary_text, precision=0.1,
-                                  unit='Read Noise (e-)', vlines=[noise_bad_thresh])
+                                  unit='Read Noise (e-)', vlines=[noise_nr_thresh])
                     else:
                         hist_page(pdf, noise_map_e[g], f'Noise map - gain: {g}', summary_text, precision=0.1, unit='Read Noise (e-)')
             
@@ -899,7 +1108,7 @@ def standard_analysis_products(dirname, **kwargs):
                 p = ax1.stairs(data_hist / noise_map_e[g].size, edges=bin_edges, label=g)
                 ax2.plot(bins[:-1], np.cumsum(data_hist / noise_map_e[g].size), color=p.get_edgecolor(), ls='--')
                 summary_text += f'RMS read noise, {g}: {read_noise_e[g]:.2f} e-\n'
-            plt.axvline(3,ls='--',color='grey',label='3e- Requirement')
+            plt.axvline(noise_nr_thresh,ls='--',color='grey',label=f'{noise_nr_thresh}e- Requirement')
             plt.xlabel('Read Noise (e-)')
             ax1.set_ylabel('Fraction of Pixels')
             min_y = 1 / (noise_map_e[g].size*2)
@@ -956,20 +1165,27 @@ def standard_analysis_products(dirname, **kwargs):
                     # Create a standard histogram page and save it to the pdf
                     summary_text = f'Frame: {g} long dark\n'
                     summary_text += '\n'.join(longdark_comment[g].split('; '))+f'\n{smoothed_txt}'
-                    summary_text += f'Min median pixel value: {dmin:.4f} e-/s; max median pixel value: {dmax:.4f} e-/s \n'
+                    summary_text += f'Min pixel value: {dmin:.4f} e-/s; max pixel value: {dmax:.4f} e-/s \n'
                     summary_text += f'Median pixel value: {dmedian:.4f} e-/s; mean pixel value: {dmean:.4f} e-/s\n'
                     
                     # Mark the read noise level as well as the bad threshold for high-gain
-                    read_noise_level = read_noise_e[g] / longdark_exp_time
+                    if g in read_noise_e:
+                        read_noise_level = read_noise_e[g] / longdark_exp_time
+                    else:
+                        read_noise_level = nom_read_noise[g] * use_gain[g] / longdark_exp_time
 
                     prec = (use_gain[g] / longdark_exp_time) * 5
                     if (g == 'high') | (g == 'high (dual-gain)'):
-                        summary_text += f'Percentage above {dark_bad_thresh} e-/s: {dark_percent_bad[g]:.2f} %; 99% percentile: {dark_current_e[g]:.4f} e-/s\n'
+                        dark_percent_nw = np.sum(dark_nw[g]) / nw_pixel_map[1].size * 100
+                        summary_text += f'Percentage above {dark_nw_thresh} e-/s: {total_dark_percent_nw:.2f} %\n'
+                        dark_percent_nr = np.sum(dark_nr[g]) / nr_pixel_map[1].size * 100
+                        summary_text += f'Percentage above {dark_nr_thresh} e-/s: {total_dark_percent_nr:.2f} %\n'
+                        summary_text += f'99% percentile dark current value: {dark_current_e[g]:.4f} e-/s\n'
                         hist_page(pdf, plot_dark, f'Long darks - {g} frame', summary_text, unit='e-/s', precision=prec,
-                                  contours=[dark_bad_thresh], vlines=[dark_bad_thresh, read_noise_level])
+                                  contours=[dark_nr_thresh], vlines=[dark_nr_thresh, read_noise_level])
                     else:
                         hist_page(pdf, plot_dark, f'Long darks - {g} frame', summary_text, unit='e-/s', precision=prec, vlines=[read_noise_level])
-
+        
         # Persistence test
         if persist_present:
             fig = plt.figure(figsize=[8.5,11],dpi=300)
@@ -1023,96 +1239,108 @@ def standard_analysis_products(dirname, **kwargs):
                     if flatdark_present: summary_text = f'Gain mode: {g}, equal-length dark subtracted\n'
                     else: summary_text = f'Gain mode: {g}{bias_note}\n'
                     summary_text += '\n'.join(mid_flat_comment[g].split('; '))+'\n'
-                    #summary_text += f'Illuminated {mid_flat_times[g]:.1f}s exposure; LED at {mid_flat_voltages[g]} V\n'
                     summary_text += f'Min pixel value: {mmin:.1f} e-; max pixel value: {mmax:.1f} e- \n'
                     summary_text += f'Median pixel value: {mmedian:.1f} e-; mean pixel value: {mmean:.1f} e-\n'
-                    summary_text += f'Percentage below {flat_bad_thresh[g]:.1f} e-/s (5-sigma below mean): {flat_percent_bad[g]:.2f} %\n'
+                    qe_percent_nw = np.sum(qe_nw[g]) / nw_pixel_map[3].size * 100
+                    summary_text += f'Percentage below {qe_nw_thresh}x median value ({qe_nw_thresh*mmedian:.1f} e-): {qe_percent_nw:.2f} %\n'
                     
                     # Create a standard histogram page and save it to the pdf
                     hist_page(pdf, flat, f'Mid-range flat frame - gain: {g}', summary_text, precision=min([50,mmax/50]))
+            
+            # Plot flat ratios
+            for g in gain_modes:
+                if g in mid_flat_ratio_im:
+                    summary_text = f'Gain mode: {g}, {mid_flat_ratio[g]:.2f} exposure time ratio\n'
+                    
+                    lin_percent_nw = np.sum(lin_nw[g]) / nw_pixel_map[2].size * 100
+                    summary_text += f'Percentage above/below expected ratio by >{lin_nw_thresh}-sigma: {lin_percent_nw:.2f} %\n'
+                    
+                    # Create a standard histogram page and save it to the pdf
+                    hist_page(pdf, mid_flat_ratio_im[g], f'Flat frame ratio - gain: {g}', summary_text, unit='ratio', precision=0.001)
 
             # Linearity and PTC plots
             
             # Linearity curve
-            for g in med_sig:
-                # Each gain mode gets its own page
-                fig = plt.figure(figsize=[8.5,11],dpi=300)
-                plt.suptitle(f'Linearity plots')
-                gs_top = plt.GridSpec(2, 1, top=0.9)
-                ax1 = fig.add_subplot(gs_top[0,:])
+            for g in gain_modes:
+                if g in med_sig:
+                    # Each gain mode gets its own page
+                    fig = plt.figure(figsize=[8.5,11],dpi=300)
+                    plt.suptitle(f'Linearity plots')
+                    gs_top = plt.GridSpec(2, 1, top=0.9)
+                    ax1 = fig.add_subplot(gs_top[0,:])
 
-                # A subplot for each voltage (we expect 4)
-                gs_bottom = gs_base = plt.GridSpec(9, 1, hspace=0)
-                ax2 = fig.add_subplot(gs_base[5,:])
-                ax3 = fig.add_subplot(gs_base[6,:], sharex = ax2)
-                ax4 = fig.add_subplot(gs_base[7,:], sharex = ax2)
-                ax5 = fig.add_subplot(gs_base[8,:], sharex = ax2)
-                vol_subplots = [ax5,ax4,ax3,ax2]
-                plt.subplots_adjust(hspace=0)
+                    # A subplot for each voltage (we expect 4)
+                    gs_bottom = gs_base = plt.GridSpec(9, 1, hspace=0)
+                    ax2 = fig.add_subplot(gs_base[5,:])
+                    ax3 = fig.add_subplot(gs_base[6,:], sharex = ax2)
+                    ax4 = fig.add_subplot(gs_base[7,:], sharex = ax2)
+                    ax5 = fig.add_subplot(gs_base[8,:], sharex = ax2)
+                    vol_subplots = [ax5,ax4,ax3,ax2]
+                    plt.subplots_adjust(hspace=0)
+                    
+                    # Plot the signal vs exposure time for each voltage
+                    led_vals = np.unique(voltage[g])
+                    alpha = np.maximum(1/(2*n_subframes), 0.05)
+                    for i, vol in enumerate(led_vals):
+                        plt.sca(ax1)
+                        means = np.array([])
+                        exposure_times = np.unique(exp_times[g])
+                        this_voltage = voltage[g] == vol
+                        
+                        # Get mean over detector subframes
+                        for t in exposure_times:
+                            this_voltage_time = this_voltage & (exp_times[g] == t)
+                            means = np.append(means, np.mean(med_sig[g][this_voltage_time]))
+                        
+                        # Plot signal and mean signal
+                        plt.scatter(exp_times[g][this_voltage], med_sig[g][this_voltage], marker='x', label=f'{g}', color=gain_color[g], alpha=alpha)
+                        plt.scatter(exposure_times, means, marker='x', label=f'{g}', color=gain_color[g])
+                        
+                        # Fit line to the set of means above 10 and less than the rough saturation level
+                        rough_sat_level = np.maximum(max(med_sig[g]) - 5000, 10000)
+                        for_fitting_lin = (means > 10) & (means < rough_sat_level)
+                        if np.sum(for_fitting_lin) > 1:
+                            model_fit_lin, mask_lin = fit_or(model, exposure_times[for_fitting_lin], means[for_fitting_lin], maxiter=100)
+                            plt.plot(np.logspace(-0.3,2.4),model_fit_lin(np.logspace(-0.3,2.4)), ls='--', color=gain_line_color[g])
+                            if model_fit_lin(0.8) > 0.5: plt.text(1.3,model_fit_lin(0.8),f'{vol} V')
+                            else: plt.text(150,model_fit_lin(250),f'{vol} V')
+                        
+                            # Plot residuals from that fit altogether for each voltage as % from fit
+                            plt.sca(vol_subplots[i])
+                            plt.plot([0.5,30000],[0,0],ls='--',color='gray')
+                            resid = (med_sig[g][this_voltage] - model_fit_lin(exp_times[g][this_voltage])) / model_fit_lin(exp_times[g][this_voltage]) * 100
+                            resid_means = (means - model_fit_lin(exposure_times)) / model_fit_lin(exposure_times) * 100
+                            plt.scatter(med_sig[g][this_voltage], resid, marker='x', label=f'{g}', color=gain_color[g], alpha=alpha)
+                            plt.scatter(means, resid_means, marker='x', label=f'{g}', color=gain_color[g])
+                            plt.text(0.02,0.1,f'{vol} V',transform=vol_subplots[i].transAxes)
+                            plt.semilogx()
+                            plt.xlim(0.5,30000)
+                        else:
+                            plt.text(1.3,max(med_sig[g][this_voltage]),f'{vol} V')
+                            plt.sca(vol_subplots[i])
+                            plt.plot([0.5,30000],[0,0],ls='--',color='gray')
+                            plt.text(0.02,0.1,f'{vol} V',transform=vol_subplots[i].transAxes)
+                            plt.semilogx()
+                            plt.xlim(0.5,30000)
                 
-                # Plot the signal vs exposure time for each voltage
-                led_vals = np.unique(voltage[g])
-                alpha = np.maximum(1/(2*n_subframes), 0.05)
-                for i, vol in enumerate(led_vals):
                     plt.sca(ax1)
-                    means = np.array([])
-                    exposure_times = np.unique(exp_times[g])
-                    this_voltage = voltage[g] == vol
+                    plt.xlabel('Exposure Time (s)')
+                    plt.ylabel('Median Signal (ADU)')
+                    plt.xlim(1.1,250)
+                    plt.ylim(0.5,30000)
+                    plt.loglog()
                     
-                    # Get mean over detector subframes
-                    for t in exposure_times:
-                        this_voltage_time = this_voltage & (exp_times[g] == t)
-                        means = np.append(means, np.mean(med_sig[g][this_voltage_time]))
+                    # Avoid duplicate legend labels
+                    handles, labels = plt.gca().get_legend_handles_labels()
+                    by_label = dict(zip(labels, handles))
+                    plt.legend(by_label.values(), by_label.keys(), fontsize=10,ncol=4,loc=8,bbox_to_anchor=(0.5, 1.0))
                     
-                    # Plot signal and mean signal
-                    plt.scatter(exp_times[g][this_voltage], med_sig[g][this_voltage], marker='x', label=f'{g}', color=gain_color[g], alpha=alpha)
-                    plt.scatter(exposure_times, means, marker='x', label=f'{g}', color=gain_color[g])
+                    ax3.set_ylabel('% deviation from linear fit')
+                    ax5.set_xlabel('Signal (ADU)')
                     
-                    # Fit line to the set of means above 10 and less than the rough saturation level
-                    rough_sat_level = np.maximum(max(med_sig[g]) - 5000, 10000)
-                    for_fitting_lin = (means > 10) & (means < rough_sat_level)
-                    if np.sum(for_fitting_lin) > 1:
-                        model_fit_lin, mask_lin = fit_or(model, exposure_times[for_fitting_lin], means[for_fitting_lin], maxiter=100)
-                        plt.plot(np.logspace(-0.3,2.4),model_fit_lin(np.logspace(-0.3,2.4)), ls='--', color=gain_line_color[g])
-                        if model_fit_lin(0.8) > 0.5: plt.text(1.3,model_fit_lin(0.8),f'{vol} V')
-                        else: plt.text(150,model_fit_lin(250),f'{vol} V')
-                    
-                        # Plot residuals from that fit altogether for each voltage as % from fit
-                        plt.sca(vol_subplots[i])
-                        plt.plot([0.5,30000],[0,0],ls='--',color='gray')
-                        resid = (med_sig[g][this_voltage] - model_fit_lin(exp_times[g][this_voltage])) / model_fit_lin(exp_times[g][this_voltage]) * 100
-                        resid_means = (means - model_fit_lin(exposure_times)) / model_fit_lin(exposure_times) * 100
-                        plt.scatter(med_sig[g][this_voltage], resid, marker='x', label=f'{g}', color=gain_color[g], alpha=alpha)
-                        plt.scatter(means, resid_means, marker='x', label=f'{g}', color=gain_color[g])
-                        plt.text(0.02,0.1,f'{vol} V',transform=vol_subplots[i].transAxes)
-                        plt.semilogx()
-                        plt.xlim(0.5,30000)
-                    else:
-                        plt.text(1.3,max(med_sig[g][this_voltage]),f'{vol} V')
-                        plt.sca(vol_subplots[i])
-                        plt.plot([0.5,30000],[0,0],ls='--',color='gray')
-                        plt.text(0.02,0.1,f'{vol} V',transform=vol_subplots[i].transAxes)
-                        plt.semilogx()
-                        plt.xlim(0.5,30000)
-            
-                plt.sca(ax1)
-                plt.xlabel('Exposure Time (s)')
-                plt.ylabel('Median Signal (ADU)')
-                plt.xlim(1.1,250)
-                plt.ylim(0.5,30000)
-                plt.loglog()
-                
-                # Avoid duplicate legend labels
-                handles, labels = plt.gca().get_legend_handles_labels()
-                by_label = dict(zip(labels, handles))
-                plt.legend(by_label.values(), by_label.keys(), fontsize=10,ncol=4,loc=8,bbox_to_anchor=(0.5, 1.0))
-                
-                ax3.set_ylabel('% deviation from linear fit')
-                ax5.set_xlabel('Signal (ADU)')
-                
-                fig.text(0.96, 0.02, pdf.get_pagecount()+1)
-                pdf.savefig()
-                plt.close()
+                    fig.text(0.96, 0.02, pdf.get_pagecount()+1)
+                    pdf.savefig()
+                    plt.close()
             
             # PTCs
             fig = plt.figure(figsize=[8.5,11],dpi=300)
@@ -1120,35 +1348,36 @@ def standard_analysis_products(dirname, **kwargs):
             ax1 = plt.subplot2grid((2,1), (0,0))
             ax2 = plt.subplot2grid((2,1), (1,0))
 
-            for g in med_sig:
-                # Fit PTC for read noise level and gain
-                if (g == 'high (dual-gain)') | (g == 'low (dual-gain)'): plt.sca(ax1)
-                else: plt.sca(ax2)
-                
-                # Is there a gain measurement here?
-                if g in det_gain:
-                    # Plot points used for fitting and points filtered out - mask filters out
-                    plt.scatter(med_sig[g][for_fitting[g]][mask_ptc[g]], var[g][for_fitting[g]][mask_ptc[g]],
-                                marker='x', color=gain_color[g], alpha=alpha)
-                    plt.scatter(med_sig[g][~for_fitting[g]], var[g][~for_fitting[g]],
-                                marker='x', color=gain_color[g], alpha=alpha)
-                    plt.scatter(med_sig[g][for_fitting[g]][~mask_ptc[g]], var[g][for_fitting[g]][~mask_ptc[g]],
-                                marker='x', color=gain_color[g])
+            for g in gain_modes:
+                if g in med_sig:
+                    # Fit PTC for read noise level and gain
+                    if (g == 'high (dual-gain)') | (g == 'low (dual-gain)'): plt.sca(ax1)
+                    else: plt.sca(ax2)
+                    
+                    # Is there a gain measurement here?
+                    if g in det_gain:
+                        # Plot points used for fitting and points filtered out - mask filters out
+                        plt.scatter(med_sig[g][for_fitting[g]][mask_ptc[g]], var[g][for_fitting[g]][mask_ptc[g]],
+                                    marker='x', color=gain_color[g], alpha=alpha)
+                        plt.scatter(med_sig[g][~for_fitting[g]], var[g][~for_fitting[g]],
+                                    marker='x', color=gain_color[g], alpha=alpha)
+                        plt.scatter(med_sig[g][for_fitting[g]][~mask_ptc[g]], var[g][for_fitting[g]][~mask_ptc[g]],
+                                    marker='x', color=gain_color[g])
 
-                    # Plot fit
-                    plt.plot(np.logspace(1,4.3), model_fit[g](np.logspace(1,4.3)), ls='--', color=gain_line_color[g],
-                             label=f'{g} gain: {det_gain[g][0]:.3f} ± {det_gain[g][1]:.3f} e-/ADU')
-                    
-                else:
-                    # Just plot the data points without fit
-                    plt.scatter(med_sig[g], var[g], marker='x', color=gain_color[g], alpha=alpha, label=f'{g} gain: no gain measurement')
-                    
-                # Plot noise and well depth
-                if g in read_noise: noise_floor = read_noise[g]**2
-                else: noise_floor = nom_read_noise[g]**2
-                plt.plot([1,2e4],[noise_floor, noise_floor], ls='--', color=gain_line_color[g], alpha=0.5)
-                plt.plot([max(med_sig[g]),max(med_sig[g])], [1,max(var[g])], ls='--', color=gain_line_color[g], alpha=0.5)
-            
+                        # Plot fit
+                        plt.plot(np.logspace(1,4.3), model_fit[g](np.logspace(1,4.3)), ls='--', color=gain_line_color[g],
+                                 label=f'{g} gain: {det_gain[g][0]:.3f} ± {det_gain[g][1]:.3f} e-/ADU')
+                        
+                    else:
+                        # Just plot the data points without fit
+                        plt.scatter(med_sig[g], var[g], marker='x', color=gain_color[g], alpha=alpha, label=f'{g} gain: no gain measurement')
+                        
+                    # Plot noise and well depth
+                    if g in read_noise: noise_floor = read_noise[g]**2
+                    else: noise_floor = nom_read_noise[g]**2
+                    plt.plot([1,2e4],[noise_floor, noise_floor], ls='--', color=gain_line_color[g], alpha=0.5)
+                    plt.plot([max(med_sig[g]),max(med_sig[g])], [1,max(var[g])], ls='--', color=gain_line_color[g], alpha=0.5)
+                
             plt.sca(ax1)
             plt.legend(loc=2)
             plt.xlabel('Median Signal (ADU)')
@@ -1159,7 +1388,7 @@ def standard_analysis_products(dirname, **kwargs):
             plt.sca(ax2)
             plt.legend(loc=2)
             plt.xlabel('Median Signal (ADU)')
-            plt.ylabel('Variance (ADU^2)')
+            plt.ylabel('Va  riance (ADU^2)')
             plt.loglog()
             plt.text(1, 0.8, 'Read Noise', color='grey')
 
@@ -1179,8 +1408,8 @@ def standard_analysis_products(dirname, **kwargs):
                 frames = [np.median(short_low_opdark_e[mode],axis=0), np.median(short_high_opdark_e[mode],axis=0),
                           np.median(long_low_opdark_e[mode],axis=0), np.median(long_high_opdark_e[mode],axis=0)]
                 names = ['short low-gain','short high-gain','long low-gain','long high-gain']
-                precisions = [use_gain['low (dual-gain)']/opshort[mode], use_gain['high (dual-gain)']/opshort[mode],
-                              use_gain['low (dual-gain)']/oplong[mode], use_gain['high (dual-gain)']/oplong[mode]]
+                precisions = [use_gain['low (dual-gain)']/opshort[mode], use_gain['high (dual-gain)']/opshort[mode]*2,
+                              use_gain['low (dual-gain)']/oplong[mode], use_gain['high (dual-gain)']/oplong[mode]*2]
                 times = [opshort[mode], opshort[mode], oplong[mode], oplong[mode]]
                 
                 for j, med_dark in enumerate(frames):
@@ -1325,7 +1554,7 @@ def hist_page(pdf, data, title, summary_text, unit='e-', precision=1, contours=F
             plt.axvline(vl,ls='--',color='grey')
     plt.semilogy()
                     
-    plt.text(0.0, -0.3, summary_text, transform=ax2.transAxes, verticalalignment='top')
+    plt.text(0.0, -0.2, summary_text, transform=ax2.transAxes, verticalalignment='top')
 
     plt.subplots_adjust(hspace=0.25)
     
