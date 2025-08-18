@@ -67,7 +67,7 @@ def standard_analysis_products(dirname, **kwargs):
     flat_present, flatdark_present, persist_present, notes_present = 0, 0, 0, 0
     opdark_modes = []
     for f in file_table['FILEPATH']:
-        if 'bias' in f: bias_present = 1
+        #if 'bias' in f: bias_present = 1
         if 'noisespec' in f: noise_present = 1
         if 'NUVdark' in f:
             if 'NUVdark' not in opdark_modes: opdark_modes.append('NUVdark')
@@ -161,19 +161,21 @@ def standard_analysis_products(dirname, **kwargs):
         nsfr = load_by_file_prefix(f'{dirname}/{camera}_{detid}_noisespec', custom_keys=['XPIX','YPIX'], **kwargs)
         noise_freq, noise_spectrum, noise_pix = [], [], []
         for ns in nsfr:
-            noise_frame = ns.cds_frames[0]
-            noise_pix.append([ns.custom_key_values['XPIX'],ns.custom_key_values['YPIX']])
-            
-            # reshape the raw image into time series for each amplifier
-            noise_gain = 65.8e-6 # in uV/DN, currently hardcoded
-            data_q = np.reshape(noise_frame,(noise_frame.shape[0],int(noise_frame.shape[1]/n_channels),n_channels),order='F') * noise_gain
-            pixel_timeseries = np.reshape(data_q,(data_q.shape[0]*data_q.shape[1],data_q.shape[2]),order='c') # Time series
-
-            # Compute the FFT using Welch's method for a smooth plot
-            sample_rate = 11.1e6 # in Hz
-            freq, pxx_den = signal.welch(pixel_timeseries,fs=sample_rate,axis=0,nperseg=2**16)
-            noise_freq.append(freq)
-            noise_spectrum.append(np.sqrt(pxx_den))
+            if len(ns.cds_frames > 0):
+                noise_frame = ns.cds_frames[0]
+                noise_pix.append([ns.custom_key_values['XPIX'],ns.custom_key_values['YPIX']])
+                
+                # reshape the raw image into time series for each amplifier
+                noise_gain = 65.8e-6 # in uV/DN, currently hardcoded
+                
+                data_q = np.reshape(noise_frame,(noise_frame.shape[0],int(noise_frame.shape[1]/n_channels),n_channels),order='F') * noise_gain
+                pixel_timeseries = np.reshape(data_q,(data_q.shape[0]*data_q.shape[1],data_q.shape[2]),order='c') # Time series
+        
+                # Compute the FFT using Welch's method for a smooth plot
+                sample_rate = 11.1e6 # in Hz
+                freq, pxx_den = signal.welch(pixel_timeseries,fs=sample_rate,axis=0,nperseg=2**16)
+                noise_freq.append(freq)
+                noise_spectrum.append(np.sqrt(pxx_den))
     
     # Get bias frames, noise maps, and read noise measurements
     if bias_present:
@@ -448,12 +450,18 @@ def standard_analysis_products(dirname, **kwargs):
             if np.sum(gain_flats) > 0:
                 # Load flat frame files
                 flat_files = file_table['FILEPATH'][gain_flats]
-                if file_table['NUM_EXP'][gain_flats][0] == 3:
+                n_exp = file_table['NUM_EXP'][gain_flats]
+                if max(n_exp) == 3:
                     # We took 3 data frames because we don't trust the first
                     # So ignore 1 initial frame
                     flat_frames = load_by_filepath(file_table['FILEPATH'][gain_flats], ignore_frame=1, **kwargs)
                 else:
                     flat_frames = load_by_filepath(file_table['FILEPATH'][gain_flats], **kwargs)
+                # If there are any files with insufficient number of exposures for PTC measurements, warn here
+                if np.sum(n_exp < 2) > 0:
+                    # Warn for incomplete files here
+                    print('Insufficient number of frames for variance measurement in the following files:')
+                    for filepath in flat_files[n_exp < 2]: print(f'- {os.path.split(filepath)[1]}')
                 exptime = file_table['EXPTIME'][gain_flats]
                 if max(file_table['FRAMTIME'][gain_flats] > 0): exptime = exptime + file_table['FRAMTIME'][gain_flats]/1000.
                 elif gain in read_time: exptime = exptime + read_time[gain]
@@ -523,9 +531,9 @@ def standard_analysis_products(dirname, **kwargs):
                     
                     if (np.sum(this_flat_darkh) > 0) and (np.sum(this_flat_darkl) > 0):
                         this_flat_darkh = flat_dark_times['high (dual-gain)'] == file_table['EXPTIME'][gain_flats][hmid_exp_i]
-                        mid_flats['high (dual-gain)'] = flat_frames[hmid_exp_i].cds_frames[0,0] - flat_darks['high (dual-gain)'][this_flat_darkh]
+                        mid_flats['high (dual-gain)'] = flat_frames[hmid_exp_i].cds_frames[0,0] - flat_darks['high (dual-gain)'][this_flat_darkh][0]
                         this_flat_darkl = flat_dark_times['low (dual-gain)'] == file_table['EXPTIME'][gain_flats][lmid_exp_i]
-                        mid_flats['low (dual-gain)'] = flat_frames[lmid_exp_i].cds_frames[0,1] - flat_darks['low (dual-gain)'][this_flat_darkl]
+                        mid_flats['low (dual-gain)'] = flat_frames[lmid_exp_i].cds_frames[0,1] - flat_darks['low (dual-gain)'][this_flat_darkl][0]
                     elif bias_present:
                         mid_flats['high (dual-gain)'] = flat_frames[hmid_exp_i].cds_frames[0,0] - med_bias_frames['high (dual-gain)']
                         mid_flats['low (dual-gain)'] = flat_frames[lmid_exp_i].cds_frames[0,1] - med_bias_frames['low (dual-gain)']
@@ -534,7 +542,6 @@ def standard_analysis_products(dirname, **kwargs):
                         mid_flats['low (dual-gain)'] = flat_frames[lmid_exp_i].cds_frames[0,1]
                     mid_flat_comment['high (dual-gain)'] = f'Illuminated {exptime[hmid_exp_i]:.1f}s exposure in high (dual-gain) gain; LED at {led[hmid_exp_i]} V{bias_note}'
                     mid_flat_comment['low (dual-gain)'] = f'Illuminated {exptime[lmid_exp_i]:.1f}s exposure in low (dual-gain) gain; LED at {led[lmid_exp_i]} V{bias_note}'
-
                 else:
                     medians, variance = np.zeros(1), np.zeros(1)
                     all_exp_times, all_voltage = np.zeros(1), np.zeros(1)
@@ -918,23 +925,24 @@ def standard_analysis_products(dirname, **kwargs):
             
         # Noise spectrum
         if noise_present:
-            fig, axs = plt.subplots(figsize=[8.5,11],dpi=300,nrows=4,gridspec_kw={'hspace': 0})
-            plt.suptitle(f'Noise Spectra')
-            labels = [f'Channel {c}' for c in range(n_channels)]
-            # We expect 3 frames from a standard exposure set but be flexible
-            for i in range(np.minimum(len(noise_spectrum),3)):
-                axs[i].loglog()
-                axs[i].plot(noise_freq[i], noise_spectrum[i], label=labels)
-                if i < len(noise_spectrum)-1: axs[i].get_xaxis().set_visible(False)
-                axs[i].set_xlabel('Frequency (Hz)')
-                if i == 0:
-                    axs[i].set_ylabel(r'Noise Density (V / Hz$^{1/2}$)')
-                    axs[i].legend(fontsize=10,ncols=4)
-                axs[i].text(0.05,0.1,f'Pixel: {noise_pix[i]}',transform=axs[i].transAxes)
-            for a in axs[np.minimum(len(noise_spectrum),3):]:
-                a.axis('off')
-            pdf.savefig()
-            plt.close()
+            if len(noise_spectrum) > 0:
+                fig, axs = plt.subplots(figsize=[8.5,11],dpi=300,nrows=4,gridspec_kw={'hspace': 0})
+                plt.suptitle(f'Noise Spectra')
+                labels = [f'Channel {c}' for c in range(n_channels)]
+                # We expect 3 frames from a standard exposure set but be flexible
+                for i in range(np.minimum(len(noise_spectrum),3)):
+                    axs[i].loglog()
+                    axs[i].plot(noise_freq[i], noise_spectrum[i], label=labels)
+                    if i < len(noise_spectrum)-1: axs[i].get_xaxis().set_visible(False)
+                    axs[i].set_xlabel('Frequency (Hz)')
+                    if i == 0:
+                        axs[i].set_ylabel(r'Noise Density (V / Hz$^{1/2}$)')
+                        axs[i].legend(fontsize=10,ncols=4)
+                    axs[i].text(0.05,0.1,f'Pixel: {noise_pix[i]}',transform=axs[i].transAxes)
+                for a in axs[np.minimum(len(noise_spectrum),3):]:
+                    a.axis('off')
+                pdf.savefig()
+                plt.close()
 
         # Long darks
         if longdark_present:
@@ -960,8 +968,9 @@ def standard_analysis_products(dirname, **kwargs):
                     summary_text += f'Median pixel value: {dmedian:.4f} e-/s; mean pixel value: {dmean:.4f} e-/s\n'
                     
                     # Mark the read noise level as well as the bad threshold for high-gain
-                    read_noise_level = read_noise_e[g] / longdark_exp_time
-
+                    if g in read_noise_e: read_noise_level = read_noise_e[g] / longdark_exp_time
+                    else: read_noise_level = nom_read_noise[g] * use_gain[g] / longdark_exp_time
+                    
                     prec = (use_gain[g] / longdark_exp_time) * 5
                     if (g == 'high') | (g == 'high (dual-gain)'):
                         summary_text += f'Percentage above {dark_bad_thresh} e-/s: {dark_percent_bad[g]:.2f} %; 99% percentile: {dark_current_e[g]:.4f} e-/s\n'
@@ -1344,8 +1353,8 @@ def make_plot(adudata, edata, title, output_path, eunit='e-'):
     # Because ADU and e data are scaled, the images themselves will be identical but the colorbars different
     aduplot = ax.imshow(adudata, vmin=np.percentile(adudata,0.03), vmax=np.percentile(adudata,99.7))
     eplot = ax.imshow(edata, vmin=np.percentile(edata,0.03), vmax=np.percentile(edata,99.7))
-    bar1 = plt.colorbar(aduplot, label='ADU', shrink=0.85)
-    bar2 = plt.colorbar(eplot, label=eunit, shrink=0.85)
+    bar1 = plt.colorbar(aduplot, label='ADU', shrink=0.8)
+    bar2 = plt.colorbar(eplot, label=eunit, shrink=0.8)
     plt.savefig(output_path)
     plt.close()
 
