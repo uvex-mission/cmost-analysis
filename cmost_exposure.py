@@ -7,6 +7,8 @@ from astropy.io import fits
 from astropy.table import Table
 from datetime import datetime
 
+import warnings
+
 class Exposure():
     '''
     Exposure object contains data from FITS file and various derived properties
@@ -193,7 +195,14 @@ class Exposure():
             # Image is stored in the 0th Extension
             # For frames not taken directly from the camera
             ignore_ext = 0
-            frame_shape = cmost_file[0].data.shape
+            if cmost_file[0].data:
+                frame_shape = cmost_file[0].data.shape
+            else:
+                # This is an empty FITS file - warn and close out gracefully
+                self.raw_frames = np.array([])
+                self.cds_frames = np.array([])
+                warnings.warn(f'FITS file {self.filepath} is empty')
+                return
     
         useable_frames = len(cmost_file) - ignore_ext
         
@@ -398,7 +407,7 @@ class Exposure():
                     self.gain, len(self.cds_frames), hdr_string, subframe_string, custom_key_str)
         return info_string
 
-    def get_mean(self, subframe, mask=None):
+    def get_mean(self, subframe, mask=None, diag=False):
         '''
         Calculate mean of subframe across all useable frames
         
@@ -417,24 +426,32 @@ class Exposure():
             Mean of subframe across all useable frames, or array of means for HDR mode
         '''
         x1, x2, y1, y2 = subframe
-        if self.readout_mode in ['ROLLINGRESET_HDR']:
-            if mask is not None:
-                mask = np.stack([mask]*self.cds_frames.shape[1])
-                mask = np.stack([mask]*self.cds_frames.shape[0])
-                masked_cds_frames = np.ma.masked_where(mask > 0, self.cds_frames[:,:,y1:y2,x1:x2])
-                m = np.ma.mean(masked_cds_frames,axis=(0,2,3))
+        if len(self.cds_frames) > 0:
+            if self.readout_mode in ['ROLLINGRESET_HDR']:
+                if mask is not None:
+                    mask = np.stack([mask]*self.cds_frames.shape[1])
+                    mask = np.stack([mask]*self.cds_frames.shape[0])
+                    masked_cds_frames = np.ma.masked_where(mask > 0, self.cds_frames[:,:,y1:y2,x1:x2])
+                    m = np.ma.mean(masked_cds_frames,axis=(0,2,3))
+                else:
+                    m = np.mean(self.cds_frames[:,:,y1:y2,x1:x2],axis=(0,2,3))
             else:
-                m = np.mean(self.cds_frames[:,:,y1:y2,x1:x2],axis=(0,2,3))
+                if mask is not None:
+                    mask = np.stack([mask]*self.cds_frames.shape[0])
+                    masked_cds_frames = np.ma.masked_where(mask > 0, self.cds_frames[:,y1:y2,x1:x2])
+                    m = np.ma.mean(masked_cds_frames)
+                else:
+                    m = np.mean(self.cds_frames[:,y1:y2,x1:x2])
         else:
-            if mask is not None:
-                mask = np.stack([mask]*self.cds_frames.shape[0])
-                masked_cds_frames = np.ma.masked_where(mask > 0, self.cds_frames[:,y1:y2,x1:x2])
-                m = np.ma.mean(masked_cds_frames)
+            if diag: print('WARNING: Not enough frames to calculate mean')
+            if self.readout_mode in ['ROLLINGRESET_HDR']:
+                m = np.array([0, 0])
             else:
-                m = np.mean(self.cds_frames[:,y1:y2,x1:x2])
+                m = 0
+                
         return m
 
-    def get_median(self, subframe, mask=None):
+    def get_median(self, subframe, mask=None, diag=False):
         '''
         Calculate median of subframe across all useable frames
         
@@ -453,24 +470,32 @@ class Exposure():
             Median of subframe across all useable frames, or array of medians for HDR mode
         '''
         x1, x2, y1, y2 = subframe
-        if self.readout_mode in ['ROLLINGRESET_HDR']:
-            if mask is not None:
-                mask = np.stack([mask]*self.cds_frames.shape[1])
-                mask = np.stack([mask]*self.cds_frames.shape[0])
-                masked_cds_frames = np.ma.masked_where(mask > 0, self.cds_frames[:,:,y1:y2,x1:x2])
-                m = np.ma.median(masked_cds_frames,axis=(0,2,3))
+        if len(self.cds_frames) > 0:
+            if self.readout_mode in ['ROLLINGRESET_HDR']:
+                if mask is not None:
+                    mask = np.stack([mask]*self.cds_frames.shape[1])
+                    mask = np.stack([mask]*self.cds_frames.shape[0])
+                    masked_cds_frames = np.ma.masked_where(mask > 0, self.cds_frames[:,:,y1:y2,x1:x2])
+                    m = np.ma.median(masked_cds_frames,axis=(0,2,3))
+                else:
+                    m = np.median(self.cds_frames[:,:,y1:y2,x1:x2],axis=(0,2,3))
             else:
-                m = np.median(self.cds_frames[:,:,y1:y2,x1:x2],axis=(0,2,3))
+                if mask is not None:
+                    mask = np.stack([mask]*self.cds_frames.shape[0])
+                    masked_cds_frames = np.ma.masked_where(mask > 0, self.cds_frames[:,y1:y2,x1:x2])
+                    m = np.ma.median(masked_cds_frames)
+                else:
+                    m = np.median(self.cds_frames[:,y1:y2,x1:x2])
         else:
-            if mask is not None:
-                mask = np.stack([mask]*self.cds_frames.shape[0])
-                masked_cds_frames = np.ma.masked_where(mask > 0, self.cds_frames[:,y1:y2,x1:x2])
-                m = np.ma.median(masked_cds_frames)
+            if diag: print('WARNING: Not enough frames to calculate median')
+            if self.readout_mode in ['ROLLINGRESET_HDR']:
+                m = np.array([0, 0])
             else:
-                m = np.median(self.cds_frames[:,y1:y2,x1:x2])
+                m = 0
+                
         return m
 
-    def get_variance(self, subframe, mask=None):
+    def get_variance(self, subframe, mask=None, diag=False):
         '''
         Calculate variance of subframe of difference between first two useable frames
 
@@ -506,14 +531,14 @@ class Exposure():
                     var = np.ma.var(masked_diff) / 2
                 else:
                     var = np.var(diff) / 2
-            return var
         else:
-            print('WARNING: Not enough frames to calculate variance')
+            if diag: print('WARNING: Not enough frames to calculate variance')
             if self.readout_mode in ['ROLLINGRESET_HDR']:
                 var = np.array([0, 0])
             else:
                 var = 0
-            return var
+        
+        return var
 
     def cleanup_frames(self):
         '''

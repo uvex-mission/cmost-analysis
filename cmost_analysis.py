@@ -68,7 +68,7 @@ def standard_analysis_products(dirname, **kwargs):
     opdark_modes = []
     for f in file_table['FILEPATH']:
         if 'bias' in f: bias_present = 1
-        if 'noisespec' in f: noise_present = 1
+        #if 'noisespec' in f: noise_present = 1
         if 'NUVdark' in f:
             if 'NUVdark' not in opdark_modes: opdark_modes.append('NUVdark')
             opdark_present = 1
@@ -180,19 +180,21 @@ def standard_analysis_products(dirname, **kwargs):
         nsfr = load_by_file_prefix(f'{dirname}/{camera}_{detid}_noisespec', custom_keys=['XPIX','YPIX'], **kwargs)
         noise_freq, noise_spectrum, noise_pix = [], [], []
         for ns in nsfr:
-            noise_frame = ns.cds_frames[0]
-            noise_pix.append([ns.custom_key_values['XPIX'],ns.custom_key_values['YPIX']])
-            
-            # reshape the raw image into time series for each amplifier
-            noise_gain = 65.8e-6 # in uV/DN, currently hardcoded
-            data_q = np.reshape(noise_frame,(noise_frame.shape[0],int(noise_frame.shape[1]/n_channels),n_channels),order='F') * noise_gain
-            pixel_timeseries = np.reshape(data_q,(data_q.shape[0]*data_q.shape[1],data_q.shape[2]),order='c') # Time series
-
-            # Compute the FFT using Welch's method for a smooth plot
-            sample_rate = 11.1e6 # in Hz
-            freq, pxx_den = signal.welch(pixel_timeseries,fs=sample_rate,axis=0,nperseg=2**16)
-            noise_freq.append(freq)
-            noise_spectrum.append(np.sqrt(pxx_den))
+            if len(ns.cds_frames > 0):
+                noise_frame = ns.cds_frames[0]
+                noise_pix.append([ns.custom_key_values['XPIX'],ns.custom_key_values['YPIX']])
+                
+                # reshape the raw image into time series for each amplifier
+                noise_gain = 65.8e-6 # in uV/DN, currently hardcoded
+                
+                data_q = np.reshape(noise_frame,(noise_frame.shape[0],int(noise_frame.shape[1]/n_channels),n_channels),order='F') * noise_gain
+                pixel_timeseries = np.reshape(data_q,(data_q.shape[0]*data_q.shape[1],data_q.shape[2]),order='c') # Time series
+        
+                # Compute the FFT using Welch's method for a smooth plot
+                sample_rate = 11.1e6 # in Hz
+                freq, pxx_den = signal.welch(pixel_timeseries,fs=sample_rate,axis=0,nperseg=2**16)
+                noise_freq.append(freq)
+                noise_spectrum.append(np.sqrt(pxx_den))
     
     # Get bias frames, noise maps, and read noise measurements
     if bias_present:
@@ -490,12 +492,18 @@ def standard_analysis_products(dirname, **kwargs):
             if np.sum(gain_flats) > 0:
                 # Load flat frame files
                 flat_files = file_table['FILEPATH'][gain_flats]
-                if file_table['NUM_EXP'][gain_flats][0] == 3:
+                n_exp = file_table['NUM_EXP'][gain_flats]
+                if max(n_exp) == 3:
                     # We took 3 data frames because we don't trust the first
                     # So ignore 1 initial frame
                     flat_frames[gain] = load_by_filepath(file_table['FILEPATH'][gain_flats], ignore_frame=1, **kwargs)
                 else:
                     flat_frames[gain] = load_by_filepath(file_table['FILEPATH'][gain_flats], **kwargs)
+                # If there are any files with insufficient number of exposures for PTC measurements, warn here
+                if np.sum(n_exp < 2) > 0:
+                    # Warn for incomplete files here
+                    print('Insufficient number of frames for variance measurement in the following files:')
+                    for filepath in flat_files[n_exp < 2]: print(f'- {os.path.split(filepath)[1]}')
                 exptime = file_table['EXPTIME'][gain_flats]
                 if max(file_table['FRAMTIME'][gain_flats] > 0): exptime = exptime + file_table['FRAMTIME'][gain_flats]/1000.
                 elif gain in read_time: exptime = exptime + read_time[gain]
@@ -526,9 +534,9 @@ def standard_analysis_products(dirname, **kwargs):
                         this_flat_darkh, this_flat_darkl = 0, 0
                     if (np.sum(this_flat_darkh) > 0) and (np.sum(this_flat_darkl) > 0):
                         this_flat_darkh = flat_dark_times['high (dual-gain)'] == file_table['EXPTIME'][gain_flats][hmid_exp_i]
-                        mid_flats['high (dual-gain)'] = flat_frames[gain][hmid_exp_i].cds_frames[0,0] - flat_darks['high (dual-gain)'][this_flat_darkh]
+                        mid_flats['high (dual-gain)'] = flat_frames[gain][hmid_exp_i].cds_frames[0,0] - flat_darks['high (dual-gain)'][this_flat_darkh][0]
                         this_flat_darkl = flat_dark_times['low (dual-gain)'] == file_table['EXPTIME'][gain_flats][lmid_exp_i]
-                        mid_flats['low (dual-gain)'] = flat_frames[gain][lmid_exp_i].cds_frames[0,1] - flat_darks['low (dual-gain)'][this_flat_darkl]
+                        mid_flats['low (dual-gain)'] = flat_frames[gain][lmid_exp_i].cds_frames[0,1] - flat_darks['low (dual-gain)'][this_flat_darkl][0]
                     elif bias_present:
                         mid_flats['high (dual-gain)'] = flat_frames[gain][hmid_exp_i].cds_frames[0,0] - med_bias_frames['high (dual-gain)']
                         mid_flats['low (dual-gain)'] = flat_frames[gain][lmid_exp_i].cds_frames[0,1] - med_bias_frames['low (dual-gain)']
@@ -551,7 +559,7 @@ def standard_analysis_products(dirname, **kwargs):
                         # Subtract the equal-length dark or bias frame from the ratio flat
                         if (np.sum(this_flat_darkh) > 0):
                             this_flat_darkh2 = flat_dark_times['high (dual-gain)'] == file_table['EXPTIME'][gain_flats][hratio_index]
-                            ratio_flat2 = ratio_flat2 - flat_darks['high (dual-gain)'][this_flat_darkh2]
+                            ratio_flat2 = ratio_flat2 - flat_darks['high (dual-gain)'][this_flat_darkh2][0]
                         elif bias_present:
                             ratio_flat2 = ratio_flat2 - med_bias_frames['high (dual-gain)']
                         mid_flat_ratio_comment['high (dual-gain)'] = f'Ratio of {exptime[hmid_exp_i]} s and {exptime[hratio_index]} s exposures at {led[hmid_exp_i]} V'
@@ -565,7 +573,7 @@ def standard_analysis_products(dirname, **kwargs):
                         # Subtract the equal-length dark or bias frame from the ratio flat
                         if (np.sum(this_flat_darkh) > 0):
                             this_flat_darkh1 = flat_dark_times['high (dual-gain)'] == file_table['EXPTIME'][gain_flats][hratio_index]
-                            ratio_flat1 = ratio_flat1 - flat_darks['high (dual-gain)'][this_flat_darkh1]
+                            ratio_flat1 = ratio_flat1 - flat_darks['high (dual-gain)'][this_flat_darkh1][0]
                         elif bias_present:
                             ratio_flat1 = ratio_flat1 - med_bias_frames['high (dual-gain)']
                         mid_flat_ratio_comment['high (dual-gain)'] = f'Ratio of {exptime[hratio_index]} s and {exptime[hmid_exp_i]} s exposures at {led[hmid_exp_i]} V'
@@ -582,7 +590,7 @@ def standard_analysis_products(dirname, **kwargs):
                         # Subtract the equal-length dark or bias frame from the ratio flat
                         if (np.sum(this_flat_darkl) > 0):
                             this_flat_darkl2 = flat_dark_times['low (dual-gain)'] == file_table['EXPTIME'][gain_flats][lratio_index]
-                            ratio_flat2 = ratio_flat2 - flat_darks['low (dual-gain)'][this_flat_darkl2]
+                            ratio_flat2 = ratio_flat2 - flat_darks['low (dual-gain)'][this_flat_darkl2][0]
                         elif bias_present:
                             ratio_flat2 = ratio_flat2 - med_bias_frames['low (dual-gain)']
                         mid_flat_ratio_comment['low (dual-gain)'] = f'Ratio of {exptime[lmid_exp_i]} s and {exptime[lratio_index]} s exposures at {led[lmid_exp_i]} V'
@@ -596,7 +604,7 @@ def standard_analysis_products(dirname, **kwargs):
                         # Subtract the equal-length dark or bias frame from the ratio flat
                         if (np.sum(this_flat_darkl) > 0):
                             this_flat_darkl1 = flat_dark_times['low (dual-gain)'] == file_table['EXPTIME'][gain_flats][lratio_index]
-                            ratio_flat1 = ratio_flat1 - flat_darks['low (dual-gain)'][this_flat_darkl1]
+                            ratio_flat1 = ratio_flat1 - flat_darks['low (dual-gain)'][this_flat_darkl1][0]
                         elif bias_present:
                             ratio_flat1 = ratio_flat1 - med_bias_frames['low (dual-gain)']
                         mid_flat_ratio_comment['low (dual-gain)'] = f'Ratio of {exptime[lratio_index]} s and {exptime[lmid_exp_i]} s exposures at {led[lmid_exp_i]} V'
@@ -607,7 +615,7 @@ def standard_analysis_products(dirname, **kwargs):
                     lin_nw['high (dual-gain)'] = np.abs(mid_flat_ratio_im['high (dual-gain)'] - np.median(mid_flat_ratio_im['high (dual-gain)'])) > (lin_nw_thresh * np.std(mid_flat_ratio_im['high (dual-gain)']))
                     lin_nw['low (dual-gain)'] = np.abs(mid_flat_ratio_im['low (dual-gain)'] - np.median(mid_flat_ratio_im['low (dual-gain)'])) > (lin_nw_thresh * np.std(mid_flat_ratio_im['low (dual-gain)']))
                     nw_pixel_map[2][lin_nw['high (dual-gain)'] | lin_nw['low (dual-gain)']] = 1
-                    
+
                     # Flag pixels being <qe_nw_thresh of median value in a mid-range flat
                     qe_nw['high (dual-gain)'] = mid_flats['high (dual-gain)'] < (qe_nw_thresh * np.median(mid_flats['high (dual-gain)']))
                     qe_nw['low (dual-gain)'] = mid_flats['low (dual-gain)'] < (qe_nw_thresh * np.median(mid_flats['low (dual-gain)']))
@@ -624,7 +632,7 @@ def standard_analysis_products(dirname, **kwargs):
                     else:
                         this_flat_dark = 0
                     if np.sum(this_flat_dark) > 0:
-                        mid_flats[gain] = flat_frames[gain][mid_exp_i].cds_frames[0] - flat_darks[gain][this_flat_dark]
+                        mid_flats[gain] = flat_frames[gain][mid_exp_i].cds_frames[0] - flat_darks[gain][this_flat_dark][0]
                     elif bias_present:
                         mid_flats[gain] = flat_frames[gain][mid_exp_i].cds_frames[0] - med_bias_frames[gain]
                     else:
@@ -641,7 +649,7 @@ def standard_analysis_products(dirname, **kwargs):
                         # Subtract the equal-length dark or bias frame from the ratio flat
                         if (np.sum(this_flat_dark) > 0):
                             this_flat_dark2 = flat_dark_times[gain] == file_table['EXPTIME'][gain_flats][ratio_index]
-                            ratio_flat2 = ratio_flat2 - flat_darks[gain][this_flat_dark2]
+                            ratio_flat2 = ratio_flat2 - flat_darks[gain][this_flat_dark2][0]
                         elif bias_present:
                             ratio_flat2 = ratio_flat2 - med_bias_frames[gain]
                         mid_flat_ratio_comment[gain] = f'Ratio of {exptime[mid_exp_i]} s and {exptime[ratio_index]} s exposures at {led[mid_exp_i]} V'
@@ -655,7 +663,7 @@ def standard_analysis_products(dirname, **kwargs):
                         # Subtract the equal-length dark or bias frame from the ratio flat
                         if (np.sum(this_flat_dark) > 0):
                             this_flat_dark1 = flat_dark_times[gain] == file_table['EXPTIME'][gain_flats][ratio_index]
-                            ratio_flat1 = ratio_flat1 - flat_darks[gain][this_flat_dark1]
+                            ratio_flat1 = ratio_flat1 - flat_darks[gain][this_flat_dark1][0]
                         elif bias_present:
                             ratio_flat1 = ratio_flat1 - med_bias_frames[gain]
                         mid_flat_ratio_comment[gain] = f'Ratio of {exptime[ratio_index]} s and {exptime[mid_exp_i]} s exposures at {led[mid_exp_i]} V'
@@ -908,7 +916,7 @@ def standard_analysis_products(dirname, **kwargs):
         plt.axis('off')
         
         # Temperature
-        if exp.temperature > 0: temp = f'{exp.temperature:2f} K (measured)'
+        if exp.temperature > 0: temp = f'{exp.temperature:.3f} K (measured)'
         else: temp = 'TEMPERATURE DATA MISSING (default 180K as of July 2025)'
         
         # Device and test summary text
@@ -959,7 +967,7 @@ def standard_analysis_products(dirname, **kwargs):
             for i in range(len(nw_types)):
                 plot_pixel_map[nw_pixel_map[i] > 0] = i+1.5
             plt.imshow(plot_pixel_map, cmap=bad_color_map, vmin=0, vmax=len(nw_types)+1, interpolation='none')
-            plt.colorbar(orientation='horizontal', label='Bad pixel type', ticks=np.arange(nw_types+1)+0.5,
+            plt.colorbar(orientation='horizontal', label='Bad pixel type', ticks=np.arange(len(nw_types)+1)+0.5,
                          format=mticker.FixedFormatter(bad_pixel_labels[:len(nw_types)+1]))
             
             # Get combined numbers and percentages of bad pixels
@@ -983,7 +991,7 @@ def standard_analysis_products(dirname, **kwargs):
             total_percentage_nw = total_nw_pixels / nw_pixel_map[0].size * 100
 
             summary_text += f'Total number of bad pixels: {int(total_nw_pixels)} ({total_percentage_nw:.2f} %)'
-            plt.text(-0.35, -0.6, summary_text, transform=ax1.transAxes, verticalalignment='top')
+            fig.text(0.1, 0.3, summary_text, verticalalignment='top')
 
             pdf.savefig()
             plt.close()
@@ -998,7 +1006,7 @@ def standard_analysis_products(dirname, **kwargs):
             for i in range(len(nr_types)):
                 plot_pixel_map[nr_pixel_map[i] > 0] = i+1.5
             plt.imshow(plot_pixel_map, cmap=bad_color_map, vmin=0, vmax=len(nr_types)+1, interpolation='none')
-            plt.colorbar(orientation='horizontal', label='Bad pixel type', ticks=np.arange(nr_types+1)+0.5,
+            plt.colorbar(orientation='horizontal', label='Bad pixel type', ticks=np.arange(len(nr_types)+1)+0.5,
                          format=mticker.FixedFormatter(bad_pixel_labels[:len(nr_types)+1]))
             
             # Get combined numbers and percentages of bad pixels
@@ -1016,7 +1024,7 @@ def standard_analysis_products(dirname, **kwargs):
             total_percentage_nr = total_nr_pixels / nr_pixel_map[0].size * 100
 
             summary_text += f'Total number of bad pixels: {int(total_nr_pixels)} ({total_percentage_nr:.2f} %)'
-            plt.text(-0.35, -0.6, summary_text, transform=ax1.transAxes, verticalalignment='top')
+            fig.text(0.1, 0.3, summary_text, verticalalignment='top')
 
             pdf.savefig()
             plt.close()
@@ -1128,23 +1136,24 @@ def standard_analysis_products(dirname, **kwargs):
             
         # Noise spectrum
         if noise_present:
-            fig, axs = plt.subplots(figsize=[8.5,11],dpi=300,nrows=4,gridspec_kw={'hspace': 0})
-            plt.suptitle(f'Noise Spectra')
-            labels = [f'Channel {c}' for c in range(n_channels)]
-            # We expect 3 frames from a standard exposure set but be flexible
-            for i in range(np.minimum(len(noise_spectrum),3)):
-                axs[i].loglog()
-                axs[i].plot(noise_freq[i], noise_spectrum[i], label=labels)
-                if i < len(noise_spectrum)-1: axs[i].get_xaxis().set_visible(False)
-                axs[i].set_xlabel('Frequency (Hz)')
-                if i == 0:
-                    axs[i].set_ylabel(r'Noise Density (V / Hz$^{1/2}$)')
-                    axs[i].legend(fontsize=10,ncols=4)
-                axs[i].text(0.05,0.1,f'Pixel: {noise_pix[i]}',transform=axs[i].transAxes)
-            for a in axs[np.minimum(len(noise_spectrum),3):]:
-                a.axis('off')
-            pdf.savefig()
-            plt.close()
+            if len(noise_spectrum) > 0:
+                fig, axs = plt.subplots(figsize=[8.5,11],dpi=300,nrows=4,gridspec_kw={'hspace': 0})
+                plt.suptitle(f'Noise Spectra')
+                labels = [f'Channel {c}' for c in range(n_channels)]
+                # We expect 3 frames from a standard exposure set but be flexible
+                for i in range(np.minimum(len(noise_spectrum),3)):
+                    axs[i].loglog()
+                    axs[i].plot(noise_freq[i], noise_spectrum[i], label=labels)
+                    if i < len(noise_spectrum)-1: axs[i].get_xaxis().set_visible(False)
+                    axs[i].set_xlabel('Frequency (Hz)')
+                    if i == 0:
+                        axs[i].set_ylabel(r'Noise Density (V / Hz$^{1/2}$)')
+                        axs[i].legend(fontsize=10,ncols=4)
+                    axs[i].text(0.05,0.1,f'Pixel: {noise_pix[i]}',transform=axs[i].transAxes)
+                for a in axs[np.minimum(len(noise_spectrum),3):]:
+                    a.axis('off')
+                pdf.savefig()
+                plt.close()
 
         # Long darks
         if longdark_present:
@@ -1174,18 +1183,18 @@ def standard_analysis_products(dirname, **kwargs):
                         read_noise_level = read_noise_e[g] / longdark_exp_time
                     else:
                         read_noise_level = nom_read_noise[g] * use_gain[g] / longdark_exp_time
-
-                    prec = (use_gain[g] / longdark_exp_time) * 5
+                        
+                    prec = use_gain[g] / longdark_exp_time / 5
                     if (g == 'high') | (g == 'high (dual-gain)'):
                         dark_percent_nw = np.sum(dark_nw[g]) / nw_pixel_map[1].size * 100
                         summary_text += f'Percentage above {dark_nw_thresh} e-/s: {total_dark_percent_nw:.2f} %\n'
                         dark_percent_nr = np.sum(dark_nr[g]) / nr_pixel_map[1].size * 100
                         summary_text += f'Percentage above {dark_nr_thresh} e-/s: {total_dark_percent_nr:.2f} %\n'
                         summary_text += f'99% percentile dark current value: {dark_current_e[g]:.4f} e-/s\n'
-                        hist_page(pdf, plot_dark, f'Long darks - {g} frame', summary_text, unit='e-/s', precision=prec,
-                                  contours=[dark_nr_thresh], vlines=[dark_nr_thresh, read_noise_level])
+                        hist_page(pdf, plot_dark*1000, f'Long darks - {g} frame', summary_text, unit='me-/s', precision=prec*1000,
+                                  contours=[dark_nr_thresh*1000], vlines=[dark_nr_thresh*1000, read_noise_level*1000])
                     else:
-                        hist_page(pdf, plot_dark, f'Long darks - {g} frame', summary_text, unit='e-/s', precision=prec, vlines=[read_noise_level])
+                        hist_page(pdf, plot_dark*1000, f'Long darks - {g} frame', summary_text, unit='me-/s', precision=prec*1000, vlines=[read_noise_level*1000])
         
         # Persistence test
         if persist_present:
@@ -1251,13 +1260,15 @@ def standard_analysis_products(dirname, **kwargs):
             # Plot flat ratios
             for g in gain_modes:
                 if g in mid_flat_ratio_im:
-                    summary_text = f'Gain mode: {g}, {mid_flat_ratio[g]:.2f} exposure time ratio\n'
-                    
-                    lin_percent_nw = np.sum(lin_nw[g]) / nw_pixel_map[2].size * 100
-                    summary_text += f'Percentage above/below expected ratio by >{lin_nw_thresh}-sigma: {lin_percent_nw:.2f} %\n'
-                    
-                    # Create a standard histogram page and save it to the pdf
-                    hist_page(pdf, mid_flat_ratio_im[g], f'Flat frame ratio - gain: {g}', summary_text, unit='ratio', precision=0.001)
+                    # If things go wrong with the flats, the ratios may end up full of NaNs - don't plot if this is the case
+                    if np.sum(~np.isnan(mid_flat_ratio_im[g])) > 0:
+                        summary_text = f'Gain mode: {g}, {mid_flat_ratio[g]:.2f} exposure time ratio\n'
+                        
+                        lin_percent_nw = np.sum(lin_nw[g]) / nw_pixel_map[2].size * 100
+                        summary_text += f'Percentage above/below expected ratio by >{lin_nw_thresh}-sigma: {lin_percent_nw:.2f} %\n'
+                        
+                        # Create a standard histogram page and save it to the pdf
+                        hist_page(pdf, mid_flat_ratio_im[g], f'Flat frame ratio - gain: {g}', summary_text, unit='ratio', precision=0.001)
 
             # Linearity and PTC plots
             
@@ -1501,15 +1512,16 @@ def hist_page(pdf, data, title, summary_text, unit='e-', precision=1, contours=F
     '''
     Default style of page showing a figure of the image, histograms, and summary text
     '''
-    dmin, dmax = np.min(data), np.max(data)
-    dmedian, dstd = np.median(data), np.std(data)
-    extremes = np.percentile(data, [0.0000573,99.9999427], method='averaged_inverted_cdf')
+    data_stat = data[np.isfinite(data)]
+    dmin, dmax = np.min(data_stat), np.max(data_stat)
+    dmedian, dstd = np.median(data_stat), np.std(data_stat)
+    extremes = np.percentile(data_stat, [0.0000573,99.9999427], method='averaged_inverted_cdf')
     
     data_range = int( (extremes[1] - extremes[0]) / precision ) + 1
     data_range2 = int( (dmax - dmin) / precision ) + 1
     
     data_hist, bin_edges = np.histogram(data[(data >= extremes[0]) & (data <= extremes[1])],bins=data_range)
-    data_hist2, bin_edges2 = np.histogram(data,bins=data_range2) # i.e. binsize=precision
+    data_hist2, bin_edges2 = np.histogram(data_stat,bins=data_range2) # i.e. binsize=precision
     
     # Define axis limits
     xlim10sigma = [np.maximum(dmedian-10*dstd, extremes[0]), np.minimum(dmedian+10*dstd, extremes[1])]
@@ -1574,8 +1586,8 @@ def make_plot(adudata, edata, title, output_path, eunit='e-'):
     # Because ADU and e data are scaled, the images themselves will be identical but the colorbars different
     aduplot = ax.imshow(adudata, vmin=np.percentile(adudata,0.03), vmax=np.percentile(adudata,99.7))
     eplot = ax.imshow(edata, vmin=np.percentile(edata,0.03), vmax=np.percentile(edata,99.7))
-    bar1 = plt.colorbar(aduplot, label='ADU', shrink=0.85)
-    bar2 = plt.colorbar(eplot, label=eunit, shrink=0.85)
+    bar1 = plt.colorbar(aduplot, label='ADU', shrink=0.8)
+    bar2 = plt.colorbar(eplot, label=eunit, shrink=0.8)
     plt.savefig(output_path)
     plt.close()
 
