@@ -511,6 +511,11 @@ def standard_analysis_products(dirname, **kwargs):
                     led = file_table['LED'][gain_flats] # get LED voltage from FITS header
                 else:
                     led = np.array([float(f.split('/')[-1].split('_')[4]) for f in flat_files]) # get LED voltage from filename
+                    
+                # Mask exptime, led, flat_frames based on number of exposures available
+                flat_frames[gain] = np.ma.masked_where(n_exp < 2, flat_frames[gain])
+                exptime = np.ma.masked_where(n_exp < 2, exptime)
+                led = np.ma.masked_where(n_exp < 2, led)
                 
                 led_vals = np.unique(led)
                 max_exp, max_i = max(exptime), np.argmax(exptime)
@@ -519,7 +524,7 @@ def standard_analysis_products(dirname, **kwargs):
                 # Get mid-range frames, identify bad pixels
                 if gain == 'hdr':
                     # Find the mid-range exposures - something close to 10000 ADU
-                    whole_frame_means = np.array([ff.get_median((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames[gain]])
+                    whole_frame_means = np.array([ff.get_median((0,ff.dev_size[0],0,ff.dev_size[1])) if ff else np.array([0, 0]) for ff in flat_frames[gain]])
                     hmid_exp_i = np.argmin(np.abs(whole_frame_means[:,0] - 10000))
                     lmid_exp_i = np.argmin(np.abs(whole_frame_means[:,1] - 10000))
 
@@ -528,14 +533,14 @@ def standard_analysis_products(dirname, **kwargs):
                     
                     # Subtract flat darks or else bias from mid-range flats
                     if flatdark_present and (len(flat_dark_times['high (dual-gain)']) > 0):
-                        this_flat_darkh = flat_dark_times['high (dual-gain)'] == file_table['EXPTIME'][gain_flats][hmid_exp_i]
-                        this_flat_darkl = flat_dark_times['low (dual-gain)'] == file_table['EXPTIME'][gain_flats][lmid_exp_i]
+                        this_flat_darkh = flat_dark_times['high (dual-gain)'] == exptime[hmid_exp_i]
+                        this_flat_darkl = flat_dark_times['low (dual-gain)'] == exptime[lmid_exp_i]
                     else:
                         this_flat_darkh, this_flat_darkl = 0, 0
                     if (np.sum(this_flat_darkh) > 0) and (np.sum(this_flat_darkl) > 0):
-                        this_flat_darkh = flat_dark_times['high (dual-gain)'] == file_table['EXPTIME'][gain_flats][hmid_exp_i]
+                        this_flat_darkh = flat_dark_times['high (dual-gain)'] == exptime[hmid_exp_i]
                         mid_flats['high (dual-gain)'] = flat_frames[gain][hmid_exp_i].cds_frames[0,0] - flat_darks['high (dual-gain)'][this_flat_darkh][0]
-                        this_flat_darkl = flat_dark_times['low (dual-gain)'] == file_table['EXPTIME'][gain_flats][lmid_exp_i]
+                        this_flat_darkl = flat_dark_times['low (dual-gain)'] == exptime[lmid_exp_i]
                         mid_flats['low (dual-gain)'] = flat_frames[gain][lmid_exp_i].cds_frames[0,1] - flat_darks['low (dual-gain)'][this_flat_darkl][0]
                     elif bias_present:
                         mid_flats['high (dual-gain)'] = flat_frames[gain][hmid_exp_i].cds_frames[0,0] - med_bias_frames['high (dual-gain)']
@@ -558,7 +563,7 @@ def standard_analysis_products(dirname, **kwargs):
                         ratio_flat2 = flat_frames[gain][hratio_index].cds_frames[0,0]
                         # Subtract the equal-length dark or bias frame from the ratio flat
                         if (np.sum(this_flat_darkh) > 0):
-                            this_flat_darkh2 = flat_dark_times['high (dual-gain)'] == file_table['EXPTIME'][gain_flats][hratio_index]
+                            this_flat_darkh2 = flat_dark_times['high (dual-gain)'] == exptime[hratio_index]
                             ratio_flat2 = ratio_flat2 - flat_darks['high (dual-gain)'][this_flat_darkh2][0]
                         elif bias_present:
                             ratio_flat2 = ratio_flat2 - med_bias_frames['high (dual-gain)']
@@ -572,7 +577,7 @@ def standard_analysis_products(dirname, **kwargs):
                         ratio_flat2 = mid_flats['high (dual-gain)']
                         # Subtract the equal-length dark or bias frame from the ratio flat
                         if (np.sum(this_flat_darkh) > 0):
-                            this_flat_darkh1 = flat_dark_times['high (dual-gain)'] == file_table['EXPTIME'][gain_flats][hratio_index]
+                            this_flat_darkh1 = flat_dark_times['high (dual-gain)'] == exptime[hratio_index]
                             ratio_flat1 = ratio_flat1 - flat_darks['high (dual-gain)'][this_flat_darkh1][0]
                         elif bias_present:
                             ratio_flat1 = ratio_flat1 - med_bias_frames['high (dual-gain)']
@@ -589,7 +594,7 @@ def standard_analysis_products(dirname, **kwargs):
                         ratio_flat2 = flat_frames[gain][lratio_index].cds_frames[0,1]
                         # Subtract the equal-length dark or bias frame from the ratio flat
                         if (np.sum(this_flat_darkl) > 0):
-                            this_flat_darkl2 = flat_dark_times['low (dual-gain)'] == file_table['EXPTIME'][gain_flats][lratio_index]
+                            this_flat_darkl2 = flat_dark_times['low (dual-gain)'] == exptime[lratio_index]
                             ratio_flat2 = ratio_flat2 - flat_darks['low (dual-gain)'][this_flat_darkl2][0]
                         elif bias_present:
                             ratio_flat2 = ratio_flat2 - med_bias_frames['low (dual-gain)']
@@ -603,7 +608,7 @@ def standard_analysis_products(dirname, **kwargs):
                         ratio_flat2 = mid_flats['low (dual-gain)']
                         # Subtract the equal-length dark or bias frame from the ratio flat
                         if (np.sum(this_flat_darkl) > 0):
-                            this_flat_darkl1 = flat_dark_times['low (dual-gain)'] == file_table['EXPTIME'][gain_flats][lratio_index]
+                            this_flat_darkl1 = flat_dark_times['low (dual-gain)'] == exptime[lratio_index]
                             ratio_flat1 = ratio_flat1 - flat_darks['low (dual-gain)'][this_flat_darkl1][0]
                         elif bias_present:
                             ratio_flat1 = ratio_flat1 - med_bias_frames['low (dual-gain)']
@@ -622,13 +627,13 @@ def standard_analysis_products(dirname, **kwargs):
                     nw_pixel_map[3][qe_nw['high (dual-gain)'] | qe_nw['low (dual-gain)']] = 1
                 else:
                     # All as in HDR section but for single gain
-                    whole_frame_means = np.array([ff.get_mean((0,ff.dev_size[0],0,ff.dev_size[1])) for ff in flat_frames[gain]])
+                    whole_frame_means = np.array([ff.get_mean((0,ff.dev_size[0],0,ff.dev_size[1])) if ff else 0 for ff in flat_frames[gain]])
                     mid_exp_i = np.argmin(np.abs(whole_frame_means - 10000))
                     mid_flat_times[gain] = exptime[mid_exp_i]
                     mid_flat_voltages[gain] = led[mid_exp_i]
                     
                     if flatdark_present and (len(flat_dark_times[gain]) > 0):
-                        this_flat_dark = flat_dark_times[gain] == file_table['EXPTIME'][gain_flats][mid_exp_i]
+                        this_flat_dark = flat_dark_times[gain] == exptime[mid_exp_i]
                     else:
                         this_flat_dark = 0
                     if np.sum(this_flat_dark) > 0:
@@ -648,7 +653,7 @@ def standard_analysis_products(dirname, **kwargs):
                         ratio_flat2 = flat_frames[gain][ratio_index].cds_frames[0]
                         # Subtract the equal-length dark or bias frame from the ratio flat
                         if (np.sum(this_flat_dark) > 0):
-                            this_flat_dark2 = flat_dark_times[gain] == file_table['EXPTIME'][gain_flats][ratio_index]
+                            this_flat_dark2 = flat_dark_times[gain] == exptime[ratio_index]
                             ratio_flat2 = ratio_flat2 - flat_darks[gain][this_flat_dark2][0]
                         elif bias_present:
                             ratio_flat2 = ratio_flat2 - med_bias_frames[gain]
@@ -662,7 +667,7 @@ def standard_analysis_products(dirname, **kwargs):
                         ratio_flat2 = mid_flats[gain]
                         # Subtract the equal-length dark or bias frame from the ratio flat
                         if (np.sum(this_flat_dark) > 0):
-                            this_flat_dark1 = flat_dark_times[gain] == file_table['EXPTIME'][gain_flats][ratio_index]
+                            this_flat_dark1 = flat_dark_times[gain] == exptime[ratio_index]
                             ratio_flat1 = ratio_flat1 - flat_darks[gain][this_flat_dark1][0]
                         elif bias_present:
                             ratio_flat1 = ratio_flat1 - med_bias_frames[gain]
@@ -689,8 +694,8 @@ def standard_analysis_products(dirname, **kwargs):
                     for j in range(y_parts):
                         x1, x2, y1, y2 = x_size*i, x_size*(i+1), y_size*j, y_size*(j+1)
                         mask = bad_pixel_map[y1:y2,x1:x2]
-                        medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) for ff in flat_frames[gain]], axis=0)
-                        variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2), mask=mask) for ff in flat_frames[gain]], axis=0)
+                        medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) if ff else np.array([0,0]) for ff in flat_frames[gain]], axis=0)
+                        variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2), mask=mask) if ff else np.array([0,0]) for ff in flat_frames[gain]], axis=0)
                         all_exp_times = np.append(all_exp_times, exptime_g[gain])
                         all_voltage = np.append(all_voltage, led_g[gain])
                 medians, variance, all_exp_times, all_voltage = medians[1:], variance[1:], all_exp_times[1:], all_voltage[1:]
@@ -706,8 +711,8 @@ def standard_analysis_products(dirname, **kwargs):
                     for j in range(y_parts):
                         x1, x2, y1, y2 = x_size*i, x_size*(i+1), y_size*j, y_size*(j+1)
                         mask = bad_pixel_map[y1:y2,x1:x2]
-                        medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) for ff in flat_frames[gain]], axis=0)
-                        variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2), mask=mask) for ff in flat_frames[gain]], axis=0)
+                        medians = np.append(medians, [ff.get_median((x1, x2, y1, y2), mask=mask) if ff else 0 for ff in flat_frames[gain]], axis=0)
+                        variance = np.append(variance, [ff.get_variance((x1, x2, y1, y2), mask=mask) if ff else 0 for ff in flat_frames[gain]], axis=0)
                         all_exp_times = np.append(all_exp_times, exptime_g[gain])
                         all_voltage = np.append(all_voltage, led_g[gain])
                 medians, variance, all_exp_times, all_voltage = medians[1:], variance[1:], all_exp_times[1:], all_voltage[1:]
