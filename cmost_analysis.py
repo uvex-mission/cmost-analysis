@@ -1525,8 +1525,8 @@ def hist_page(pdf, data, title, summary_text, unit='e-', precision=1, contours=F
     data_range = int( (extremes[1] - extremes[0]) / precision ) + 1
     data_range2 = int( (dmax - dmin) / precision ) + 1
     
-    data_hist, bin_edges = np.histogram(data[(data >= extremes[0]) & (data <= extremes[1])],bins=data_range)
-    data_hist2, bin_edges2 = np.histogram(data_stat,bins=data_range2) # i.e. binsize=precision
+    data_hist, bin_edges = np.histogram(data_stat[(data_stat >= extremes[0]) & (data_stat <= extremes[1])],bins=np.minimum(data_range,100000))
+    data_hist2, bin_edges2 = np.histogram(data_stat,bins=np.minimum(data_range2,100000)) # i.e. binsize=precision
     
     # Define axis limits
     xlim10sigma = [np.maximum(dmedian-10*dstd, extremes[0]), np.minimum(dmedian+10*dstd, extremes[1])]
