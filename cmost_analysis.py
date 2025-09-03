@@ -29,6 +29,9 @@ from cmost_exposure import Exposure, load_by_file_prefix, load_by_filepath, scan
 from scipy.ndimage import gaussian_filter
 from scipy import signal
 
+import warnings
+warnings.filterwarnings('ignore', category=RuntimeWarning)
+
 font = {'size' : 12, 'family' : 'sans-serif'}
 matplotlib.rc('font', **font)
 
@@ -152,8 +155,8 @@ def standard_analysis_products(dirname, **kwargs):
     if 'subframe' in kwargs:
         subframe = kwargs['subframe']
         x, y = subframe[1]-subframe[0]+1, subframe[3]-subframe[2]+1
-        nw_pixel_map = np.zeros([len(nw_types),x,y])
-        nr_pixel_map = np.zeros([len(nr_types),x,y])
+        nw_pixel_map = np.zeros([len(nw_types),y,x])
+        nr_pixel_map = np.zeros([len(nr_types),y,x])
         doc_name = f'{output_prefix}{subframe}_analysis_report_{nowstring}.pdf'
     else:
         nw_pixel_map = np.zeros([len(nw_types),exp.dev_size[1],exp.dev_size[0]])
@@ -1543,7 +1546,7 @@ def hist_page(pdf, data, title, summary_text, unit='e-', precision=1, contours=F
                     
     plt.sca(ax1)
     # Scale to median +/- 3-sigma to have outliers pop out
-    plt.imshow(data, vmin=np.percentile(data,0.03), vmax=np.percentile(data,99.7))
+    plt.imshow(data, vmin=np.percentile(data_stat,0.03), vmax=np.percentile(data_stat,99.7))
     plt.colorbar(label=unit, shrink=0.9)
     if contours:
         plt.contour(gaussian_filter(data,2), levels=contours, colors='r', linewidths=0.5)
